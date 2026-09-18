@@ -1,0 +1,4 @@
+(.venv) rafael@rafael-honors:~/honors/collatz$ ./parallel1.o 25 10000000000
+terminate called after throwing an instance of 'thrust::_V_300402_SM_1200::system::detail::bad_alloc'
+  what():  std::bad_alloc: cudaErrorMemoryAllocation: out of memory
+Aborted                    ./parallel1.o 25 10000000000

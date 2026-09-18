@@ -1,0 +1,6 @@
+Computation time: 69.0388 seconds
+N=100000000
+failure_count=0
+sum_stopping_times=17923493476
+average_stopping_time=179
+maximum_peak=2185143829170100
