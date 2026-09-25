@@ -78,8 +78,6 @@ int main(int argc, char* argv[]) {
   unsigned int N = stoul(argv[2]);
   auto start_x = thrust::make_counting_iterator<unsigned long long>(1);
   auto last_x = start_x + N;
-  thrust::device_vector<unsigned long long> d_values(N);
-  thrust::host_vector<unsigned long long> h_values(N);
 
   thrust::device_vector<Result> d_results(N);
   thrust::host_vector<Result> h_results(N);
@@ -87,6 +85,7 @@ int main(int argc, char* argv[]) {
   AnalyzeCollatz collatz;
   thrust::transform(start_x, last_x, d_results.begin(), collatz);
 
+  // Copies the results from the device to the host...
   h_results = d_results;
 
   auto computation_done = chrono::steady_clock::now();

@@ -1,0 +1,3 @@
+Computation time: 0.00721188 seconds
+N=100
+time_to_gen=0.000819877

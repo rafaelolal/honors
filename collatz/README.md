@@ -2,7 +2,9 @@ Compilation command:
 
 For serial use `g++...`
 
-Parallel: `nvcc -o parallel2.o --extended-lambda parallel2.cu`
+Parallel: `nvcc -o parallel1.o --extended
+-lambda parallel1.cu`
+
 
 Info:
 

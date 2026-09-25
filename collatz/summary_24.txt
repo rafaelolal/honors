@@ -1,4 +1,5 @@
 Computation time: 15.9795 seconds
+N=1,000,000,000
 failure_count=0
 sum_stopping_times=203234783374
 average_stopping_time=203

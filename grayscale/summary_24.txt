@@ -1,0 +1,6 @@
+Computation time: 0.082424 seconds
+N=400
+width=20000
+height=20000
+pixel_count=400000000
+image_generation_time=0.478265

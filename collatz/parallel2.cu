@@ -1,35 +1,30 @@
 #include <chrono>
 #include <cstdint>
+#include <cub/device/device_reduce.cuh>
 #include <cuda_runtime.h>
-#include <iostream>
-#include <limits>
-
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <thrust/copy.h>
 #include <thrust/device_vector.h>
 #include <thrust/fill.h>
 #include <thrust/host_vector.h>
-#include <thrust/reduce.h>
-// #include <thrust/reduce_by_key.h>
-#include <thrust/sort.h>
-#include <thrust/tabulate.h>
-#include <thrust/transform.h>
-
-#include <cub/device/device_reduce.cuh>
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
+#include <thrust/reduce.h>
+#include <thrust/sort.h>
+#include <thrust/tabulate.h>
+#include <thrust/transform.h>
 #include <thrust/tuple.h>
 
 using namespace std;
 
 int main(int argc, char* argv[]) {
   if (argc != 3) {
-    std::cout
-        << "argument (int) E (for experiment number) and (int) N is required!";
+    cout << "argument (int) E (for experiment number) and (int) N is required!";
     return 0;
   }
 
