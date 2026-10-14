@@ -262,6 +262,17 @@ Instead of testing visibility ray by ray, this paper lets the GPU draw it. In th
 * *Code:* None found.
 * *Gap for us:* It shows rendering can replace ray tests for a few viewpoints at interactive speed but is not a DEM method and does not scale to all-observer visibility, so a CUDA total viewshed on terrain is untouched.
 
+*2023 · Dong & Zhang · A Multi-Level Distributed Computing Approach to XDraw Viewshed Analysis Using Apache Spark · Remote Sensing 15(3), 761*
+
+ML-XDraw spreads the XDraw viewshed algorithm, which works outward from the observer in square rings, across a cluster of machines. It cuts the terrain into nested rings and splits each ring into equal-area pieces small enough for one worker's memory. Each ring's results are handed to the next ring through a shared store, and a trick near piece boundaries recovers cells that would otherwise be lost. Spark handles the scheduling.
+
+* *Type:* single-observer (huge grids); approximate (XDraw, about 96.5 to 98% of cells match serial XDraw); rings-outward XDraw, distributed
+* *Hardware:* A 7-node Apache Spark 2.4.7 cluster (96 CPU cores, 384 GB RAM, 64 executors with 1 core each), compared with a 48-core, 96 GB workstation running serial XDraw, in Scala (no GPU).
+* *Input / output:* Resampled Australia DEMs from 4.5 to 28.2 billion cells (16.8 to 105 GB) in, a visibility bitmap out.
+* *Runtime:* Wall-clock minutes, best speedup 13.15x on a 18.1-billion-cell DEM (195.8 min down to 14.89 min) versus serial XDraw on one workstation.
+* *Code:* none found
+* *Gap for us:* It scales one observer across machines and says GPU integration is future work, so it gives no GPU kernel and no all-observers computation.
+
 *2022 · Sánchez Fernández · Novel Parallel Approaches to Efficiently Solve Spatial Problems on Heterogeneous CPU-GPU Systems · PhD thesis, Universidad de Málaga*
 
 This PhD thesis covers three spatial problems, and only the total-viewshed part (Chapter 4) and its use for UAV path planning (Chapter 5) matter here. Its method, called sDEM, rotates the terrain one sector at a time and rewrites it as a "skewed" grid so that every cell along a line of sight sits in the same memory row. One GPU thread per observer cell then sweeps along its row, and the results are un-skewed and added up. The sectors are split across several GPUs, which gives large speedups over the earlier single-threaded total-viewshed (TVS) code.
@@ -360,6 +371,17 @@ The paper makes the exact "rotating line" viewshed method (radial sweep, as accu
 * *Runtime:* 1.7 s on the 10,801² grid, about 3.5x faster than GPU R3 and about 6,200x faster than sequential R3 (just under 3 hours); the abstract says 1,627x over sequential radial sweep, but the body says 1,980x for that comparison and 1,627x for GPU R3 over CPU R3, so the abstract figure looks mislabeled.
 * *Code:* none found.
 * *Gap for us:* It computes one observer at a time and keeps about 5.9 GB of intermediate data for a 116-million-cell grid on one GPU, so repeating it for every cell is impractical and a total viewshed needs a different way of sharing work.
+
+*2019 · Wu et al. · HiViewshed: An Interactive Online Viewshed Analysis System for Multiple Observers · CSAE 2019 (ACM)*
+
+HiViewshed is a web service that returns viewsheds for hundreds of observer points at once. A task scheduler gives each observer to a separate MPI process, and inside each process OpenMP threads split the area into equal angle slices. A pyramid of lower-resolution elevation tiles lets the system read coarser data when the map is zoomed out, which cuts the work. The per-observer viewshed uses the standard ray-and-maximum-slope method.
+
+* *Type:* multi-observer (hundreds of chosen points, not every cell, though the abstract calls it "total viewshed"); line-of-sight max-slope (Bresenham rays), accuracy not stated; hybrid MPI + OpenMP task parallelism
+* *Hardware:* One SMP server with Intel Xeon E5-4620 CPUs (16 cores in total, 192 GB RAM), using C++ with MPI and OpenMP (no GPU).
+* *Input / output:* A 30 m SRTM raster of China (grid size not stated) and up to 512 observers in, a visible-area map for each observer out.
+* *Runtime:* Average time per observer; the 300 km radius took only about 2x as long as the 100 km radius, and speed stopped improving past 16 processes, with no absolute best time or speedup given in the text.
+* *Code:* none found
+* *Gap for us:* It parallelizes over observers on CPUs with no GPU, uses a single-observer kernel, and reports no timings against any baseline, so all-cells total viewshed on a GPU is untouched.
 
 *2018 · Afshani et al. · An Efficient Algorithm for the 1D Total Visibility-Index Problem and Its Parallelization · ACM Journal of Experimental Algorithmics 23(2)*
 
@@ -460,6 +482,28 @@ Each CUDA thread walks one ray from the observer to the map edge and keeps the h
 * *Code:* http://viewshed.s51mo.net (link from the paper, not verified).
 * *Gap for us:* It uses only about 2(R+C) threads per observer and is approximate, so it offers little parallelism for one viewpoint and its errors would pile up over millions of observers.
 
+*2014 · Tabik et al. · Efficient Data Structure and Highly Scalable Algorithm for Total-Viewshed Computation · venue not stated (IEEE-format preprint)*
+
+Instead of running one viewshed per observer, this paper computes the viewshed of every cell in the terrain together. For each of S directions it sweeps across the grid in the perpendicular direction, keeping a narrow "band of sight" of about sqrt(N) cells around each observer in a small doubly linked list. Each step of the sweep deletes one cell and inserts one, so the list is reused instead of rebuilt. The list is small enough to fit in the CPU's L1 cache, which makes the sweep very fast, and it supports observers raised above the ground.
+
+* *Type:* Total viewshed; approximate (band-of-sight sampling, S directions); sweep with a linked-list profile.
+* *Hardware:* Intel Core 2 Duo E8500 CPU, no GPU.
+* *Input / output:* 2000x2000-cell DEMs at 10 m (4 million observers each) in, a visible area per observer out (the data structure is stored per band, not as a full N x N matrix).
+* *Runtime:* 0.0032 s per viewpoint (total time divided by 4 million), versus 10 s for ArcMap Viewshed and 18 s for GRASS r.viewshed on one viewpoint, about 3,000x to 5,600x (derived).
+* *Code:* www.ac.uma.es/~siham/tvs.tar.gz (link given in the paper, not checked).
+* *Gap for us:* It is CPU-only and its linked list is updated sequentially, so a CUDA version must redesign the sweep so that many sectors or many sweep lines run in parallel.
+
+*2014 · Ferreira et al. · A Parallel Algorithm for Viewshed Computation on Grid Terrains · Journal of Information and Data Management 5(2)*
+
+The authors make Van Kreveld's sweep-line viewshed algorithm run on several CPU cores. That algorithm normally cannot be split up, because each cell's answer depends on all earlier cells as a ray rotates around the observer. They cut the area around the observer into pie-slice sectors, give each sector its own list of events and its own search tree, and process the sectors on separate threads. A few cells near sector edges get computed twice, which does not change the result.
+
+* *Type:* single-observer; exact (same accuracy as Van Kreveld/R3); rotational sweep line (parallelized over sectors)
+* *Hardware:* Dual Intel Xeon E5-2687 3.1 GHz (16 cores total) and an Intel Core i5-3330 (4 cores), using C++ and OpenMP.
+* *Input / output:* SRTM grids from 5000x5000 to 30000x30000 cells (up to 3.35 GiB) in, one viewshed bitmap for a centered observer out.
+* *Runtime:* Wall-clock viewshed time only, best speedup 12.0x on 16 threads (24 s to 2 s on 5000x5000) versus the serial Van Kreveld implementation.
+* *Code:* none found
+* *Gap for us:* It computes one observer on CPU threads and says a GPU version is hard because the balanced tree needs pointers, so it gives no GPU method and no way to compute all observers.
+
 *2012 · Tabik, Zapata & Romero · Simultaneous computation of total viewshed on large high resolution grids · International Journal of Geographical Information Science 27(4)*
 
 The paper computes how much terrain is visible from every point of a map in one combined pass rather than redoing a single-viewpoint calculation for each point. For each of 360 one-degree directions it sorts the terrain points, then uses a tree of convex hulls to find each point's visible stretches quickly. A second, cheap stage fills in the opposite ends of those stretches from the reverse direction, which halves the storage and work.
@@ -492,6 +536,17 @@ For one observer, the GPU checks every terrain cell with its own thread using th
 * *Runtime:* Wall-clock more than 50x faster than sequential R3 for datasets under 4 GB (best case 179 s versus 16,917 s, about 94x, derived), and 8,749 s compute for the 20.54 GB peak case.
 * *Code:* none found.
 * *Gap for us:* It computes one viewshed at O(n^3) per observer, so it says nothing about producing a viewshed size for every cell.
+
+*2012 · Osterman · Implementation of the r.cuda.los module in the open source GRASS GIS by using parallel computation on the NVIDIA CUDA graphic cards · Elektrotehniski vestnik 79(1-2)*
+
+The paper rewrites GRASS GIS's r.los module in CUDA to compute a viewshed from one observer. Each GPU thread handles one straight line from the observer to the map edge, and 2*(rows+cols) threads cover the whole map. A thread walks along its line, compares the viewing angle of each cell with the largest angle seen so far, and marks the cell visible if its angle is higher. It also corrects for Earth curvature and can limit the azimuth and tilt for radio planning.
+
+* *Type:* Single observer; approximate (grid walk along lines to the map edge); one thread per line.
+* *Hardware:* NVIDIA GeForce GTX 560 Ti (336 CUDA cores, 1 GB) with an Intel Core 2 Duo E8200 CPU, using CUDA.
+* *Input / output:* A DEM up to 28161x17921 cells at 12.5 m (all of Slovenia, about 505 million cells, derived) in, a map of the viewing angle at the visible cells out.
+* *Runtime:* 18 s for the whole 28161x17921 map, and 1.2 s versus 516 s for r.los (about 430x, derived) at 12.5 m with a 10 km maximum distance.
+* *Code:* none found (the kernel is listed in the paper).
+* *Gap for us:* It computes only one observer and spends over 90% of its time on disk and PCIe transfers, so a total viewshed needs far more parallelism than one thread per line and a way to keep data on the GPU.
 
 *2011 · Chao et al. · Parallel Algorithm for Viewshed Analysis on a Modern GPU · International Journal of Digital Earth*
 
@@ -548,6 +603,17 @@ The authors compute how much of a landscape is visible from every single point b
 * *Code:* none found.
 * *Gap for us:* It only distributes an unoptimized per-cell CPU viewshed, so GPU mapping, memory-aware algorithms and comparison with modern exact methods are left open.
 
+*2004 · Salomon et al. · Accelerating Line of Sight Computation Using Graphics Processing Units · venue not stated (OneSAF/RDECOM-funded conference paper)*
+
+The paper answers many point-to-point line-of-sight questions between simulated entities on a terrain. The GPU first draws the terrain from above, then draws each query as a line with the depth test reversed, and an occlusion query reports whether any part of the line goes below the terrain. If none does, the two points can definitely see each other, and these queries are discarded. Only the remaining queries go to an exact ray-casting test on the CPU, and the GPU and CPU work on alternating batches at the same time.
+
+* *Type:* Point-to-point line of sight (not a viewshed); exact result with conservative GPU culling; rasterization plus CPU ray casting.
+* *Hardware:* NVIDIA GeForce 6800 Ultra with a Pentium 4 3.4 GHz, using OpenGL occlusion queries (graphics API, not CUDA).
+* *Input / output:* A terrain of about 1 million triangles covering about 400 km per side with query pairs up to 4 km apart in, a yes/no line-of-sight answer per pair out.
+* *Runtime:* About 4 microseconds per query on average (speedup versus a CPU-only baseline not stated).
+* *Code:* none found.
+* *Gap for us:* It answers pairwise queries through the graphics pipeline and never produces a viewshed, so it gives only the idea of GPU culling and not a way to compute all observers at once.
+
 *2002 · Kaučič & Žalik · Comparison of Viewshed Algorithms on Regular Spaced Points · Spring Conference on Computer Graphics (SCCG), Budmerice*
 
 This paper is a survey that implements and tests 11 variants of single-viewpoint viewshed algorithms on gridded terrain. It compares an exact method (R3 with linear interpolation) against faster approximate ones: R2, the XDraw family and line-drawing methods (Bresenham, 4-way stepping, 8-way stepping). Each is run for 20 view radii and 10 viewpoint positions, and judged by CPU time and by how many cells it labels wrongly compared with the exact method. The exact method is the most accurate but very slow, and the approximate ones have small errors that shrink as the radius grows.
@@ -558,6 +624,17 @@ This paper is a survey that implements and tests 11 variants of single-viewpoint
 * *Runtime:* CPU seconds averaged over 10 viewpoints; at radius 250 the exact method takes 33.844 s, R2 takes 0.606 s and 8WS takes 0.198 s (Table 1), and Table 5 puts 8WS at 0.8% of the exact method's time.
 * *Code:* none found.
 * *Gap for us:* It is purely sequential and single-viewpoint on a tiny 2002 CPU, so it only supplies the exact-versus-approximate accuracy and error-measurement baseline, not any total-viewshed or GPU method.
+
+*1998 · Ware, Kidner and Rallings · Parallel Distributed Viewshed Analysis · ACM GIS '98 (6th ACM International Symposium on Advances in GIS)*
+
+The paper speeds up the "reverse viewshed" (a visibility index for each cell in a region, counting how many line-of-sight profiles succeed) by splitting the work over a cluster of ordinary networked PCs. It divides the DEM and the set of observer cells among the machines, either fixed in advance (static) or handed out in chunks by a master node as workers finish (dynamic "farming"). It compares 6 static and 5 dynamic schemes on 1 to 24 processors. Dynamic farming balances the load best, and the best chunk size is about 0.1 to 0.3% of the domain.
+
+* *Type:* Multi-observer (visibility index for a block of observers); exact line-of-sight profiles; domain decomposition, master/worker.
+* *Hardware:* 24 Pentium 100 MHz PCs on 10 Mbit/s Ethernet running Windows NT 4.0 with PVM, no GPU.
+* *Input / output:* A 441x441 DEM (22 km x 22 km at 50 m) with 41x41 = 1,681 observer cells in, a visibility index per observer out (about 327 million profiles).
+* *Runtime:* Speedup of about 22x on 24 processors versus one processor (absolute times not stated).
+* *Code:* none found.
+* *Gap for us:* It scales across machines but covers only 1,681 observers and shows that load balancing and chunk size matter, whereas a CUDA total viewshed needs the same balancing across thousands of GPU threads.
 
 *1994 · Franklin & Ray · Higher isn't necessarily better: visibility algorithms and experiments · Advances in GIS Research, SDH '94*
 
