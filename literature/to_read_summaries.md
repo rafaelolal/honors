@@ -4,6 +4,13 @@
 
 First GPU port of the exact radial sweep. Every cell emits three events (insert, query, remove). The events are sorted on the GPU (Merge Path) with angle, distance and type packed into one 64-bit key. A 360,000-bucket histogram plus prefix sum partitions the sorted list by angle, and each thread sweeps its own partition. Each thread has its own pre-allocated static BST status tree, initialised from the cells that the start ray crosses. Doubles are converted to integers to shrink intermediate data. Result: exact output, which the R2-style parallel sweep of Ferreira et al. does not give.
 
+*Work ideas:* The sweep stage is 62% of runtime and the memory footprint (5.87 GB of events for 10K²) is the stated ceiling. Their own future work is multiple GPUs or streamed I/O with pinned host memory. Worth reading for the exact-output baseline to compare against, and for the static-tree trick, which gave up to 44× on the sequential sweep alone. A parallel sweep that avoids storing the full event list would attack the limit directly.
+
+*Optimizations:*
+* *Static BST:* a pre-allocated array tree (32,767 slots per thread) replaces the pointer tree. No allocation or rebalancing, no pointers (about 80% less tree memory), and GPUs cannot allocate cheaply in global memory anyway. The cost is unused slots.
+* *Doubles to integers:* angle and distance are scaled (90.233 becomes 90233) so one 64-bit key sorts all three fields, with event type breaking ties (delete, then query, then insert). Event data shrinks about 40%.
+* *Sort and partition:* Merge Path sort in shared memory, then a histogram plus prefix sum split the list by angle so each thread owns one partition. They note the histogram could use shared memory, but it is only 7% of time.
+
 * *Type:* Single; exact; radial sweep (Van Kreveld) on GPU, in-memory.
 * *Hardware:* GPU: NVIDIA Titan V + AMD Threadripper 1950X (16 cores, 2.15 GHz), NVCC 10, Ubuntu 18.04.
 * *Input / output:* Input is SRTM Germany 10,801×10,801 (0.43 GB); SRTM 5,000² and 10,000². Event list about 5.87 GB (compressed) and status trees about 0.61 GB for 5,000 threads, which is why 10K² is the ceiling on an 11 GB card. Output is per-cell visibility for one observer.
@@ -16,6 +23,16 @@ First GPU port of the exact radial sweep. Every cell emits three events (insert,
 *2015 · Cauchi-Saunders & Lewis · GPU enabled XDraw viewshed analysis · Journal of Parallel and Distributed Computing 84, 87–93 · [DOI](https://doi.org/10.1016/j.jpdc.2015.07.001) · cited 24× (OpenAlex, 2026-10-13)*
 
 First GPU XDraw. Each concentric square ring is computed in parallel (one thread per ring cell, using the two LOS values of the inner ring), with a barrier between rings. Eight octants are independent; the optimised XDraw-O merges them into two kernels. Branches are replaced by `max()`. A tiled buffer is filled per ring so neighbours are read in one transaction. R3, R2 and DDA are also ported to the GPU with few changes to serve as baselines.
+
+*Work ideas:* Suggests future work optimizing DDA, R3 and R2, which beat the naive GPU XDraw. XDraw-O (optimized) was fastest, but the comparison is not fair to the other algorithms, which were only naively converted to GPU. Whether XDraw-O still wins once the others get the same tuning is left open. The authors point to Zhao et al. (DDA memory optimizations) and Ferreira (optimized sweep) for that. Also, inearize the XDraw rings so each ring is a contiguous array. That gives a better memory access pattern and one thread per ring cell, with no octant-specific indexing or tile edge cases.
+
+*Optimizations:*
+* *Tiled buffer (the main gain):* each cell needs 2 inner-ring LoS values and 1 elevation (3 global reads, 1 write). Per ring and octant, those values are copied once into a per-multiprocessor buffer (about 2 × octant width), so threads stop stalling on global reads.
+* *Branches to `max()`:* the LoS update becomes a max, so no divergent paths where both sides run.
+* *Eight kernels to two:* octants are grouped (N/S-leaning in kernel 1, E/W-leaning in kernel 2) to cut branching on "is this octant finished".
+* *Less host copying:* input arrays are not copied back, only the visibility array is.
+* *Noted but not tested:* more kernel variants, multiple GPUs, unified CPU/GPU memory, better dispatch, and the effect of core count. Plain GPU XDraw was slower than DDA and R3, possibly because C++ AMP picked poor tile sizes automatically.
+* *Their hypothesis:* the two-kernel version won on thread throughput even though eight kernels have better memory contiguity, so XDraw may respond more to throughput than to access pattern. This is speculation, not isolated by an experiment. XDraw-O also showed edge artifacts they attribute to a tile edge case.
 
 * *Type:* Single; approximate (XDraw interpolates from two inner-ring cells); XDraw (compared with R3, R2, DDA on CPU and GPU).
 * *Hardware:* CPU and GPU (C++ AMP, vendor-neutral). AMD "6870" GPU (presumably Radeon HD 6870) with an Intel i5-3570 and 12 GB RAM; C++ AMP on the DirectX 11 driver, inside the EonFusion GIS.
@@ -30,12 +47,42 @@ First GPU XDraw. Each concentric square ring is computed in parallel (one thread
 
 A CUDA replacement for GRASS `r.los`. One thread per boundary cell (N = 2·C + 2·R threads) walks a ray from the observer to the map edge, keeps the running maximum vertical angle, and writes the angle to the output cell if it is not below that maximum. Earth-curvature correction is applied per step. Azimuth and tilt limits are added for radio-planning use. If the map exceeds about half of GPU memory it is processed in bands. The author reports that more than 90% of wall time is file and PCIe transfer.
 
+*Work ideas:* Mostly a practical baseline: R2 on a GPU with almost no tuning, already 300-800× faster than GRASS `r.los`. Since I/O is over 90% of its time, the open question is how much of the kernel is left once transfer is hidden (streams, pinned memory). The follow-up Osterman et al. 2014 addresses I/O-efficient R2. It also fits the "naive ports" side of the Cauchi comparison.
+
+*Optimizations:*
+* *Constant memory* for values fixed during the kernel (max distance, azimuth and slope limits).
+* *No block cooperation:* threads are independent, so block layout does not matter. Four sub-threads per boundary cell (N, S, W, E) set the walking direction.
+* *Banding:* maps over about half of GPU memory are split into bands, processed starting from the band containing the observer.
+* *Parallel output init:* the null fill of the output is itself done on the GPU.
+* No shared-memory or coalescing tuning; global memory is used throughout because the maps are too big.
+
 * *Type:* Single; approximate (one ray per boundary cell, nearest-cell steps, no interpolation; paper compares only by eye with r.los); R2-style boundary rays.
 * *Hardware:* Single GPU. NVIDIA GeForce GTX 560 Ti (336 CUDA cores, 1 GB, CC 2.1), Intel Core 2 Duo E8200 2.66 GHz, 2 GB RAM, Linux; nvcc inside GRASS.
 * *Input / output:* Input is integer/short DEM rasters at 100 m, 25 m and 12.5 m; the whole of Slovenia, 28,161×17,921 at 12.5 m. Output is a raster of vertical angle per visible cell (null elsewhere), scaled to integer; same size as input.
 * *Runtime:* Wall-clock vs r.los. Slovenia at 12.5 m: 18 s total. Table 1: 100 m map 50 km range 44 s → 0.15 s (about 290×); 25 m map 20 km 511 s → 0.6 s (about 850×); 12.5 m 10 km 516 s → 1.2 s (about 430×) *(derived)*. r.los did not finish for the larger cases. Paper claims 10–1000×.
 * *Code:* GRASS module; no repository given in the paper (none found).
 * *Leads:* Osterman, Benedičič & Ritoša 2014 (follow-up I/O-efficient R2; cited by Qarah, Zhao, Gu); Huang et al. 2007 (cluster GRASS).
+
+*2014 · Osterman, Benedičič & Ritoša · An IO-efficient parallel implementation of an R2 viewshed algorithm for large terrain maps on a CUDA GPU · International Journal of Geographical Information Science 28(11), 2304–2327 · [DOI](https://doi.org/10.1080/13658816.2014.918319) · cited 6× (Taylor & Francis page in the PDF)*
+
+The follow-up to r.cuda.los, now called `r.cuda.visibility`. It keeps one thread per boundary ray (rays always go to the map edge, so N ≈ 2C + 2R) and adds linear interpolation between the two neighbouring cells. Only the ray that passes nearest a cell's centre decides that cell's visibility; neighbouring rays compare their offsets through shared memory. The map is cut into horizontal strips (segments) that fit in host and GPU memory. Strips are processed outward from the observer's strip, and a "horizon vector" carries each ray's maximum angle into the next strip. Disk reads, copies, the kernel and disk writes overlap using double buffers and two CUDA streams. This lets it handle maps far larger than RAM (up to 186 GB, 50 billion cells).
+
+*Work ideas:* This is the tuned version of the 2012 baseline, so it is the R2 to beat, not the naive one. Once transfers are overlapped, the whole run is limited by disk throughput: the kernel is only about 12% of total time at 186 GB *(derived)*. So kernel speedups only matter for in-memory runs or many observers. The authors measured that east/west rays take about 2× longer than north/south rays because their reads are strided. That is a concrete target: transposing the map for the east/west half would make those reads coalesced as well. Their future work is only other interpolation methods. They also flag a parallel version of Izraelevitz 2003 (XDraw/LoS hybrid) as an open challenge.
+
+*Optimizations:*
+* *Floats with a step counter (the occupancy fix):* the naive kernel used doubles (37 registers, about 66% occupancy). Plain floats gave Moiré artefacts because `x += xstep` accumulates rounding error. Instead, an integer step counter is incremented and x, y are recomputed from scratch each step. This allowed floats with 28 registers and about 90% occupancy, at 512 threads per block.
+* *Coalesced access:* rays toward north/south read neighbouring cells in one row, so one transaction serves a warp. East/west rays need about 4 reads for the same data. The authors call coalescing during segmentation the main reason for the speed.
+* *Overlapped I/O:* pinned host memory, double buffers and two streams overlap disk, PCIe and kernel work. Segment kernels must run in order because of the horizon vector, but the copies and disk I/O around them overlap.
+* *Intertwined blocks:* blocks cannot share memory, so the last two threads of one block and the first two of the next compute the same rays. This costs 2 extra threads per block (about 0.4% at 512 threads) and avoids a second kernel.
+* *Tested and rejected:* texture memory gave about 10% faster kernels with hardware interpolation, but it fixes the segment size and limits interpolation choices, so it was dropped.
+* *Segment count:* 3 to 50 segments barely changes runtime; past about 10,000 segments kernel launch overhead adds about 10%.
+
+* *Type:* Single; approximate (R2 with interpolation and nearest-ray rule; 99.52–99.89% of cells agree with R3 over 10 observers, vs 93.2–97.5% for TiledVS); R2-style boundary rays, external memory.
+* *Hardware:* Single GPU. NVIDIA GeForce GTX 680, Intel Core i7-3930K (6 cores, 3.2 GHz), 32 GB RAM, Corsair Force GT SSD, Ubuntu 11.04; CUDA 5.0.
+* *Input / output:* Input is Slovenia DEMs at 25 m (14,081×8,961, 0.48 GB) and 12.5 m (28,161×17,921, 1.89 GB), plus eight upsampled versions up to 1.25 m (281,610×179,210, 186 GB); 4-byte integer heights. Output is a visibility raster of the same size, written to disk per segment.
+* *Runtime:* Wall-clock including disk I/O. 0.48 GB: 1.8 s total (0.2 s kernel) vs R3 310 s (pit) / 2,776 s (peak) and TiledVS 28 s. 1.89 GB: 7 s vs R3 1,426 / 21,045 s. 186 GB: 1,922 s (235 s kernel, 218 segments) vs sequential `r.cpu.visibility` 20,474 s (about 10.7× *(derived)*); the table gives no TiledVS time at that size. Unlike R3, runtime does not depend on how much is visible.
+* *Code:* Stated as available at http://viewshed.s51mo.net (not checked); also part of GRASS-RaPlaT.
+* *Leads:* Ferreira et al. 2012 (TiledVS, external memory); Zhao et al. 2013 (GPU R3); Strnad 2011 and Gao et al. 2011 (texture-memory GPU viewsheds); Izraelevitz 2003; Toma 2012 (I/O-efficient viewsheds survey).
 
 <div style="page-break-after: always;"></div>
 
@@ -44,6 +91,15 @@ A CUDA replacement for GRASS `r.los`. One thread per boundary cell (N = 2·C + 2
 *2022 · Cheng & Dou · HiPDERL: An Improved Implementation of the PDERL Viewshed Algorithm and Accuracy Analysis · ISPRS International Journal of Geo-Information 11(10), 506 · [DOI](https://doi.org/10.3390/ijgi11100506) · cited 6× (OpenAlex, 2026-10-13)*
 
 Re-implementation of Wu et al.'s PDERL, which reorganises R3's work in a PDE coordinate system so that results are reused through a "reference polyline" of maximum elevation per direction, giving O(n²) with R3-like interpolation. The paper adds a checker that compares PDERL with R3 per cell. It finds three flaws in the original implementation: observers on grid points are mishandled (cells in the observer's column skipped), the error-avoidance mechanism is wrong, and float rounding leaks through the linked-list reuse. HiPDERL changes the reference-line data structure and the error handling so that errors are not carried forward.
+
+*Work ideas:* Single-threaded CPU only, so not a GPU method. Its value is as an accuracy checker: HiPDERL is within 0.01% of R3 at near-XDraw speed, so it could be the ground truth for judging approximate GPU outputs on large grids where R3 is too slow. The authors suggest it as the baseline for total-viewshed work. Whether the reference polyline maps to a GPU is untested.
+
+*Optimizations:*
+* *Store coordinates, not slopes:* each linked-list node holds the (D, E) point directly, so E is read without traversing the list and rounding error does not accumulate.
+* *Independent ΔE:* ΔE is recomputed from the current polyline rather than the previous ΔE, so errors are not passed along.
+* *Extra intersection value:* the intersection's E is now also computed, which costs a little speed (about 45 s vs about 40 s for the original PDERL).
+* *Fixes to the original:* correct handling of observers on grid points and a repaired error-avoidance step.
+* Garbage collection for the linked list is implemented. No parallelism is used.
 
 * *Type:* Single (total viewshed named as future work); exact in principle (the paper's goal is R3-equivalent output); PDERL (proximity-direction-elevation reference lines).
 * *Hardware:* CPU (single thread). Windows 10, Intel Core i7-9750H 2.6 GHz, 16 GB; single-threaded C++.
@@ -59,6 +115,14 @@ Re-implementation of Wu et al.'s PDERL, which reorganises R3's work in a PDE coo
 *2025 · Schwencke, Stütz & Bulatov · AI-Accelerated Viewshed Computation for High-Resolution Elevation Models · VISIGRAPP 2025 (GRAPP), pp. 251–258 · [DOI](https://doi.org/10.5220/0013168400003912) · cited 0× (OpenAlex, 2026-10-13)*
 
 A fully connected network reads the DTM and nDSM profile along a LoS (plus target height) and predicts the farthest visible point, so the exact slope sweep can stop there instead of going to the maximum view distance. A modified Huber loss penalises underestimation more than overestimation, with a visibility-weighted term. Because the network output is a per-LoS cutoff, it composes with any LoS-based total-viewshed code and parallelises across rays.
+
+*Work ideas:* An orthogonal idea: it does not change how visibility is computed, only how far each ray goes. It could be bolted onto an R2 or GPU total-viewshed kernel to cut work. The gap is that it is only evaluated as a share of operations, not wall-clock on a GPU, and the inference cost (0.03 ms per LoS) has to be weighed against short rays. Their future work is skip connections, parallel networks and CNNs, not deeper nets.
+
+*Optimizations:*
+* *Early abort at the predicted farthest visible point (FVP):* before the FVP the sweep is exact, so only cells beyond the prediction can be wrong.
+* *Asymmetric loss:* the modified Huber loss punishes predicting too early more than too late, and a safety margin (about 250 m, or 2% of range) shifts errors toward the safe side.
+* *Compared with a fixed rule:* a simple 1° max-slope abort already helps (7.8-19.5% of the work), but the network does better (1.0-5.3%).
+* *Batching:* inference runs in batches of 10,000 LoS.
 
 * *Type:* Total (the LoS-based total-viewshed setting; the experiments are on single LoS profiles); approximate (a too-early prediction misses visible cells; unchanged otherwise); LoS sweep with a neural-network farthest-visible-point (FVP) cutoff.
 * *Hardware:* CPU inference (no GPU). Intel Xeon Gold 6154 for inference (about 0.03 ms per LoS in batches of 10,000); no GPU used; training hardware not stated.
