@@ -2,9 +2,11 @@
 
 *2019 · Qarah & Tu · A Fast Exact Viewshed Algorithm on GPU · IEEE International Conference on Big Data 2019, pp. 3397–3405 · DOI not printed in the PDF · cited: not indexed*
 
+My idea: it stores a lot of intermediary data and calculation. I am wondering whether that can be optimized with fancy iterators or a streaming approach. That way, there isn't much data stored. Also find a way to not store the full event list.
+
 First GPU port of the exact radial sweep. Every cell emits three events (insert, query, remove). The events are sorted on the GPU (Merge Path) with angle, distance and type packed into one 64-bit key. A 360,000-bucket histogram plus prefix sum partitions the sorted list by angle, and each thread sweeps its own partition. Each thread has its own pre-allocated static BST status tree, initialised from the cells that the start ray crosses. Doubles are converted to integers to shrink intermediate data. Result: exact output, which the R2-style parallel sweep of Ferreira et al. does not give.
 
-*Work ideas:* The sweep stage is 62% of runtime and the memory footprint (5.87 GB of events for 10K²) is the stated ceiling. Their own future work is multiple GPUs or streamed I/O with pinned host memory. Worth reading for the exact-output baseline to compare against, and for the static-tree trick, which gave up to 44× on the sequential sweep alone. A parallel sweep that avoids storing the full event list would attack the limit directly.
+*Work ideas:* The sweep stage is 62% of runtime and the memory footprint (5.87 GB of events for 10K²) is the stated ceiling. Their own future work is multiple GPUs or streamed I/O with pinned host memory. The static-tree trick, which gave up to 44× on the sequential sweep alone. A parallel sweep that avoids storing the full event list would attack the limit directly.
 
 *Optimizations:*
 * *Static BST:* a pre-allocated array tree (32,767 slots per thread) replaces the pointer tree. No allocation or rebalancing, no pointers (about 80% less tree memory), and GPUs cannot allocate cheaply in global memory anyway. The cost is unused slots.
@@ -22,9 +24,11 @@ First GPU port of the exact radial sweep. Every cell emits three events (insert,
 
 *2015 · Cauchi-Saunders & Lewis · GPU enabled XDraw viewshed analysis · Journal of Parallel and Distributed Computing 84, 87–93 · [DOI](https://doi.org/10.1016/j.jpdc.2015.07.001) · cited 24× (OpenAlex, 2026-10-13)*
 
+My thoughts: Linearize the XDraw rings so each ring is a contiguous array. That gives a better memory access pattern and one thread per ring cell, with no octant-specific indexing or tile edge cases. It mentions this DDA algorithm that I saw in other papers but am not familiar with. In this paper, each thread computes one ring cell, using the computation from the two inner-ring cells which more specifically are the two cells that are closest to the observer along the line of sight. The paper balances merging the 8 octants into two kernels instead, and talk about removing branching from the kernel, which I already read is very important.
+
 First GPU XDraw. Each concentric square ring is computed in parallel (one thread per ring cell, using the two LOS values of the inner ring), with a barrier between rings. Eight octants are independent; the optimised XDraw-O merges them into two kernels. Branches are replaced by `max()`. A tiled buffer is filled per ring so neighbours are read in one transaction. R3, R2 and DDA are also ported to the GPU with few changes to serve as baselines.
 
-*Work ideas:* Suggests future work optimizing DDA, R3 and R2, which beat the naive GPU XDraw. XDraw-O (optimized) was fastest, but the comparison is not fair to the other algorithms, which were only naively converted to GPU. Whether XDraw-O still wins once the others get the same tuning is left open. The authors point to Zhao et al. (DDA memory optimizations) and Ferreira (optimized sweep) for that. Also, inearize the XDraw rings so each ring is a contiguous array. That gives a better memory access pattern and one thread per ring cell, with no octant-specific indexing or tile edge cases.
+*Work ideas:* Suggests future work optimizing DDA, R3 and R2, which beat the naive GPU XDraw. XDraw-O (optimized) was fastest, but the comparison is not fair to the other algorithms, which were only naively converted to GPU. Whether XDraw-O still wins once the others get the same tuning is left open. The authors point to Zhao et al. (DDA memory optimizations) and Ferreira (optimized sweep) for that.
 
 *Optimizations:*
 * *Tiled buffer (the main gain):* each cell needs 2 inner-ring LoS values and 1 elevation (3 global reads, 1 write). Per ring and octant, those values are copied once into a per-multiprocessor buffer (about 2 × octant width), so threads stop stalling on global reads.
@@ -44,6 +48,8 @@ First GPU XDraw. Each concentric square ring is computed in parallel (one thread
 3. R2 / boundary-ray sightlines
 
 *2012 · Osterman · Implementation of the r.cuda.los module in the open source GRASS GIS by using parallel computation on the NVIDIA CUDA graphic cards · Elektrotehniški vestnik 79(1–2), 19–24 · No DOI found · cited: not indexed*
+
+My thoughts: 90% of the the time is spent in I/O. This paper itself is not super interesting, it would be more interesting to read the follow-up that fixes this I/O problem. Each thread computes one ray from the observer to the map edge, naive.
 
 A CUDA replacement for GRASS `r.los`. One thread per boundary cell (N = 2·C + 2·R threads) walks a ray from the observer to the map edge, keeps the running maximum vertical angle, and writes the angle to the output cell if it is not below that maximum. Earth-curvature correction is applied per step. Azimuth and tilt limits are added for radio-planning use. If the map exceeds about half of GPU memory it is processed in bands. The author reports that more than 90% of wall time is file and PCIe transfer.
 
@@ -114,6 +120,8 @@ Re-implementation of Wu et al.'s PDERL, which reorganises R3's work in a PDE coo
 
 *2025 · Schwencke, Stütz & Bulatov · AI-Accelerated Viewshed Computation for High-Resolution Elevation Models · VISIGRAPP 2025 (GRAPP), pp. 251–258 · [DOI](https://doi.org/10.5220/0013168400003912) · cited 0× (OpenAlex, 2026-10-13)*
 
+My thoughts: not particularly interesting. All of the results are essentially the accuracy of the neural network, and how much work the neural network saves the algorithm from doing. It doesn't actually have numbers for how much faster the neural network + viewshed is. It says the neural network takes 0.03 ms per LoS, but doesn't talk about whether NN + viewshed computation is faster than just the computation itself. I guess we could have one GPU running the NN and another GPU running the computation, and that would be very interesting...
+
 A fully connected network reads the DTM and nDSM profile along a LoS (plus target height) and predicts the farthest visible point, so the exact slope sweep can stop there instead of going to the maximum view distance. A modified Huber loss penalises underestimation more than overestimation, with a visibility-weighted term. Because the network output is a per-LoS cutoff, it composes with any LoS-based total-viewshed code and parallelises across rays.
 
 *Work ideas:* An orthogonal idea: it does not change how visibility is computed, only how far each ray goes. It could be bolted onto an R2 or GPU total-viewshed kernel to cut work. The gap is that it is only evaluated as a share of operations, not wall-clock on a GPU, and the inference cost (0.03 ms per LoS) has to be weighed against short rays. Their future work is skip connections, parallel networks and CNNs, not deeper nets.
@@ -130,3 +138,51 @@ A fully connected network reads the DTM and nDSM profile along a LoS (plus targe
 * *Runtime:* Reported as share of computations, not wall-clock. Network alone needs 1.0–5.3% of the full computation at 99.5–99.75% accuracy; with a +250 m margin 3.4–7.7% at 99.8–99.9%; the simple 1° max-slope abort needs 7.8–19.5% at 99.8–99.99%; a 15° abort needs 38.7–54.0%. Absolute error about ±250 m (2% of range); worse in the hillier regions, and not tested on very mountainous terrain.
 * *Code:* None found.
 * *Leads:* Sánchez-Fernández 2021 (sDEM), Tabik et al. 2015, Qarah 2020, Wang et al. 2023 (reference planes), Zhang et al. 2021 (Spark XDraw). Needs combining with a GPU total-viewshed code to be compared on time.
+
+<div style="page-break-after: always;"></div>
+
+6. Max-pooling skip + reference-plane LOS hybrid (Matryoshka doll)
+
+*2020 · Pan, Tang, Tjahjadi, Wu & Xiao · A Novel Rapid Method for Viewshed Computation on DEM through Max-Pooling and Min-Expected Height · ISPRS International Journal of Geo-Information 9(11), 633 · [DOI](https://doi.org/10.3390/ijgi9110633) · cited 5× (OpenAlex, 2026-10-14)*
+
+A CPU hybrid of LOS and reference-plane methods. The DEM is split into eight symmetric sectors, each a Pascal-triangle of layers. The Matryoshka doll step uses LOS for the cells directly below and on the 45° diagonals of the current judgment point. It then uses the judgment point plus two neighbours as a reference plane for the middle cell of the next two layers, and moves the judgment point inward. On top of that, the DEM is max-pooled into 1 km × 1 km blocks. While walking a LOS, the minimum height needed to be visible in a block is compared with the block's maximum, and the whole block is skipped if it cannot be seen. Visibility itself is a cross-product test (two multiplications, three subtractions), and a hidden run in a valley is traversed by adding the LOS slope each step.
+
+*Work ideas:* The block-skip idea is cheap and independent of the sweep, so it could be bolted onto a GPU R2 or sweep kernel as a per-ray early exit (a coarse max-height pyramid as the lookup). The paper reports a gain mainly on plains and little in mountains, which is the case where a GPU kernel has the most divergence to lose. The gap is that nothing is quantified: all results are figures, with no table of times, no hardware and no speedup factors. Accuracy is only compared against R3 as a similar/different rate per observer, so this is a lead rather than a baseline. The authors list GPU parallelisation as future work.
+
+*Optimizations:*
+* *Max-pooling skip:* the DEM is pooled to the maximum per block. If a block's maximum is below the minimum expected height of the LOS, none of its cells can be visible and the walk jumps to the next block.
+* *Global termination:* once the minimum expected height passes 8,848 m the rest of the ray is dropped. They suggest using a per-region maximum instead as future work.
+* *Earth-curvature correction:* heights are corrected once, before the sweep, rather than per step.
+* *Reference-plane reuse:* each judgment point's two neighbours give visibility for two layers, so inner cells are not re-walked from the observer.
+* *Cross product plus incremental slope:* the cross-product test is used for visible cells and plain slope addition inside hidden runs, so a valley costs one addition per cell.
+
+* *Type:* Single; approximate (DEM points stand in for interpolated LOS points; accuracy falls with coarser DEMs and rougher terrain); LOS / reference-planes hybrid with block skipping.
+* *Hardware:* Not stated. CPU implementation; no GPU used (GPU listed as future work).
+* *Input / output:* Input is two areas of about 40 km² near Changsha (one flat with low hills, one mountainous), at 10 m (DLR SRTM X-SAR) and 30 m (ASTER GDEM V2); 12 observer points. Output is a binary viewshed per observer; the paper does not give grid sizes in cells.
+* *Runtime:* Wall-clock, shown only as plots (Figures 18-19), so no numbers. The paper states that Matryoshka and reference planes are faster than R2 and LOS at 10 m, and R2 is much slower on high-resolution data. The pooling gain is large on plains and small in mountains. Accuracy: similar/different rate vs R3, shown as plots; the text says only "good performance" and that error grows with terrain relief and DEM cell size.
+* *Code:* None found.
+* *Leads:* Cohen (cross-product visibility test, ref. 26); Ferreira et al. (parallel radial sweep, ref. 19); Osterman (r.los on CUDA, ref. 20); Franklin & Ray 1994 (R2 / reference planes); Kaučič & Žalik 2002 (comparison of viewshed algorithms).
+
+<div style="page-break-after: always;"></div>
+
+7. View-tree (occlusion tree over the grid)
+
+*2022 · Wang, Xiong, Guo, Zhang & Tang · A view-tree method to compute viewsheds from digital elevation models · International Journal of Geographical Information Science (online 2022) · [DOI](https://doi.org/10.1080/13658816.2022.2094385) · cited 14× (OpenAlex, 2026-10-14)*
+
+The DEM is turned into a tree rooted at the observer. A cell C "view-blocks" B (seen from A) if C lies within a buffer of radius R around segment AB and between A and B (checked with a distance-to-line and two dot-product tests). Each cell's parent is the neighbour that blocks it, with the smallest R chosen if several do. The viewshed is then a depth-first or breadth-first traversal. Each node compares its actual slope with the running minimum visible slope inherited from its parent, so the LOS is never walked explicitly. When several neighbours block a cell, four variants are defined (Quick, Avg, Min, Max view-tree) for how the minimum visible slope is combined. Theoretical cost is O(N²) time and space.
+
+*Work ideas:* The result is an XDraw-like cost (about 10% slower with DFS) with R2-like accuracy, and R is a knob between the two (about 0.5 L behaves like R3/R2, 0.7 L and above like XDraw). The interesting part is that the parent pointers do not depend on the elevations, only on the geometry and the observer cell. So the tree could be built once per observer position and reused across terrains, or the tree shape could be precomputed for a fixed relative layout. For a GPU, depth-first traversal is a poor fit, so the breadth-first variant would map to level-synchronous kernels much like XDraw rings (the tree depth is on the order of the ring count). No GPU version is described, and the paper gives no absolute times, so a GPU port is untested.
+
+*Optimizations:*
+* *View-block buffer radius R:* the only tuning knob, set between 0.45 L and 0.80 L (L is cell size). Below about 0.40 L the tree only covers the four cardinal rays and the result is meaningless; larger R is slower (+19% time from 0.45 L to 0.80 L with BFS).
+* *Precomputation:* since the observer is fixed, vector moduli and the actual slopes can be computed in advance, trading O(N²) memory for time.
+* *Traversal choice:* depth-first was fastest (about 10% slower than XDraw); breadth-first was about 19% slower. DFS is not recommended with the Avg/Min/Max variants since it cannot guarantee a node is visited after its parent's siblings.
+* *Quick-view-tree:* decides each node from its parent only, and skips revisits.
+* No parallelism is used.
+
+* *Type:* Single; approximate (R3 used as ground truth; the output depends on R); view-tree / dynamic programming over a tree of neighbour occlusions.
+* *Hardware:* Not stated (the paper says only that all methods ran on the same hardware); CPU, no GPU.
+* *Input / output:* Input is 2 m DEMs of loess hilly-gully terrain (Suide County, Shanxi; mean altitude 1,035 m), plus a bedrock mountain region (Qinling, 2,146 m) and a loess ridge-gully region (Yan'an, 1,512 m); 15 observers at peaks, runoff nodes and saddles. A series of 10 DEMs from 50 to 500 cells radius is used for scaling. Output is a viewshed raster plus a minimum visible slope per cell.
+* *Runtime:* Reported as a ratio to R3 (plots, no absolute times). The text says XDraw is fastest, view-tree DFS about 10% slower than XDraw, view-tree BFS about 19% slower, and R2 about 1.8× XDraw (so the abstract's "40% faster than R2" is consistent with this, *(derived)*). Accuracy vs R3 (loess hilly-gully, average of 15 observers): error rate / omission rate 2.78% / 8.45% for view-tree, 2.80% / 2.68% for R2, 6.56% / 17.07% for XDraw. Across three terrains the averages are 3.88% / 8.30% (view-tree), 4.28% / 2.81% (R2), 8.11% / 20.24% (XDraw). Omission is the weak point: more visible cells are marked invisible than with R2.
+* *Code:* None found.
+* *Leads:* Wu et al. 2021 (PDERL); Zhu et al. 2019 (HiXDraw); Izraelevitz 2003 (backtracking XDraw); Wang, Robinson & White 2000 (reference planes); Kaučič & Žalik 2002 (line rasterization R2); Sánchez-Fernández et al. 2021 (skewed DEM).
