@@ -1,5 +1,28 @@
 1. Radial (rotational) sweep with event list
 
+*2020 · Qarah · Efficient Viewshed Computation Algorithms On GPUs and CPUs · PhD dissertation, University of South Florida · No DOI · cited 1× (OpenAlex, 2026-10-13)*
+
+My thoughts: I didn't know how comprehensive PhD dissertations are, but this is going to be an amazing resources for me to get context for my own research as it pretty much traces the whole history of viewshed calculation.
+
+Some key citation numbers: 102, 108, 128, 129, 110, 130 (I have not looked at these because I didnt have the bibliography printed but they seem important)
+
+Some key pages:
+81-83: context
+92-97
+100-102
+111: results
+118: profiling (good to read for when I need to profile my code)
+
+Extends the 2019 paper (below). The sweep line's cells become insert/query/remove events that are sorted by angle, then distance. A histogram plus prefix sum over angle gives each GPU thread a small angular slice. A pre-allocated static binary tree replaces the dynamic status tree. The new part is memory: the grid is cut into equal sectors (8 sectors with 4 scan-regions on the GPU, quadrant or half-quadrant scan on the CPU), and each sector's event list is built, sorted and swept in turn with one status tree. Cell IDs per sector are found by scanning a quadrant, not by R2-style rays, so exactness is kept. The thesis also tunes the Merge Path GPU sort.
+
+* *Type:* Single; exact; radial sweep / plane sweep (Van Kreveld) with static-BST status tree, sector-segmented.
+* *Hardware:* CPU and GPU: NVIDIA Titan V (5120 cores, 11 GB) + AMD Ryzen Threadripper 1950X (16 cores, 2.15 GHz), CUDA/NVCC 10, Ubuntu 18.04. The merge-sort tuning ran on a GTX Titan X.
+* *Input / output:* Input is SRTM Germany 10,800×10,800 (OpenDEM); SRTM grids from 5,000² to 30,000² (the Ferreira et al. 2014 sets); 25,000² (2.32 GB) on CPU for the memory study. Output is a per-cell visibility array for one observer, same grid size.
+* *Runtime:* Wall-clock. Unsegmented GPU sweep: about 1.7 s at 10,800², 3.5× vs GPU-R3, about 2000× vs sequential radial sweep, about 6200× vs sequential R3. Segmented GPU version: up to 4.4× vs GPU-R3, handles 6.25× more data (the unsegmented one stops at 10K×10K), but is about 2× slower than the unsegmented one on the smallest grids. CPU static BST: 10–44× vs dynamic-BST sweep, 70–80% less status-tree memory. Event list at 25K²: 38.42 GB → 2.32 GB with 30 sectors; at 100K²: 614.7 GB → 20.5 GB. Merge Path tweak: 8% average, up to 17%.
+* *Code:* None found.
+* *Leads:* Ferreira et al. 2014 (parallel radial sweep, approximate); Haverkort, Toma & Zhuang 2009 (external-memory sweep); Osterman et al. 2014 (I/O-efficient GPU R2); Green et al. 2012 (GPU Merge Path).
+
+
 *2019 · Qarah & Tu · A Fast Exact Viewshed Algorithm on GPU · IEEE International Conference on Big Data 2019, pp. 3397–3405 · DOI not printed in the PDF · cited: not indexed*
 
 My idea: it stores a lot of intermediary data and calculation. I am wondering whether that can be optimized with fancy iterators or a streaming approach. That way, there isn't much data stored. Also find a way to not store the full event list.
@@ -96,6 +119,8 @@ The follow-up to r.cuda.los, now called `r.cuda.visibility`. It keeps one thread
 
 *2022 · Cheng & Dou · HiPDERL: An Improved Implementation of the PDERL Viewshed Algorithm and Accuracy Analysis · ISPRS International Journal of Geo-Information 11(10), 506 · [DOI](https://doi.org/10.3390/ijgi11100506) · cited 6× (OpenAlex, 2026-10-13)*
 
+My thoughts: very interesting algorithm and very novel idea. I didn't quite understand it, but from the little I did, it seems like it could be parralelized well. It is pretty much just as accurate as R3 but much faster, and the author even offers it as a replacement for the baseline exact algorithm since R3 isn't used on most papers because its not efficient enough. All of these papers give me ideas about overllaping IO with computation since IO is one of the big issues. The algorithm has this step where it has to compute polylines and intersections, and I wonder if we can use RT cores for this, overlapping even more computation. This paper lead me to read about the reference plane algorithm by Wang 2000
+
 Re-implementation of Wu et al.'s PDERL, which reorganises R3's work in a PDE coordinate system so that results are reused through a "reference polyline" of maximum elevation per direction, giving O(n²) with R3-like interpolation. The paper adds a checker that compares PDERL with R3 per cell. It finds three flaws in the original implementation: observers on grid points are mishandled (cells in the observer's column skipped), the error-avoidance mechanism is wrong, and float rounding leaks through the linked-list reuse. HiPDERL changes the reference-line data structure and the error handling so that errors are not carried forward.
 
 *Work ideas:* Single-threaded CPU only, so not a GPU method. Its value is as an accuracy checker: HiPDERL is within 0.01% of R3 at near-XDraw speed, so it could be the ground truth for judging approximate GPU outputs on large grids where R3 is too slow. The authors suggest it as the baseline for total-viewshed work. Whether the reference polyline maps to a GPU is untested.
@@ -145,6 +170,10 @@ A fully connected network reads the DTM and nDSM profile along a LoS (plus targe
 
 *2020 · Pan, Tang, Tjahjadi, Wu & Xiao · A Novel Rapid Method for Viewshed Computation on DEM through Max-Pooling and Min-Expected Height · ISPRS International Journal of Geo-Information 9(11), 633 · [DOI](https://doi.org/10.3390/ijgi9110633) · cited 5× (OpenAlex, 2026-10-14)*
 
+My thoughts: not an exact algorithm, and they showed it has accuracy erros from 4-16%, which seems like a lot, especially compared to hipdrl (or whatever it's called). They proposed their future work to be looking to implement this algorithm on the GPU, which is probably something I can do if they haven't done so already. But idk if this algorithm is super interesting given the accuracy issues. I also pretty much understood nothing about the algorithm, if I ultimately decide to work on this i'd have to grow very familiar to make it in the GPU.
+
+I checked this paper's cited by to see if they made their parallel follow-up and they haven't, but I found a few more cool papers: https://scholar.google.com/scholar?cites=9832036794216258529&as_sdt=10000005&sciodt=0,20&hl=en
+
 A CPU hybrid of LOS and reference-plane methods. The DEM is split into eight symmetric sectors, each a Pascal-triangle of layers. The Matryoshka doll step uses LOS for the cells directly below and on the 45° diagonals of the current judgment point. It then uses the judgment point plus two neighbours as a reference plane for the middle cell of the next two layers, and moves the judgment point inward. On top of that, the DEM is max-pooled into 1 km × 1 km blocks. While walking a LOS, the minimum height needed to be visible in a block is compared with the block's maximum, and the whole block is skipped if it cannot be seen. Visibility itself is a cross-product test (two multiplications, three subtractions), and a hidden run in a valley is traversed by adding the LOS slope each step.
 
 *Work ideas:* The block-skip idea is cheap and independent of the sweep, so it could be bolted onto a GPU R2 or sweep kernel as a per-ray early exit (a coarse max-height pyramid as the lookup). The paper reports a gain mainly on plains and little in mountains, which is the case where a GPU kernel has the most divergence to lose. The gap is that nothing is quantified: all results are figures, with no table of times, no hardware and no speedup factors. Accuracy is only compared against R3 as a similar/different rate per observer, so this is a lead rather than a baseline. The authors list GPU parallelisation as future work.
@@ -169,6 +198,8 @@ A CPU hybrid of LOS and reference-plane methods. The DEM is split into eight sym
 
 *2022 · Wang, Xiong, Guo, Zhang & Tang · A view-tree method to compute viewsheds from digital elevation models · International Journal of Geographical Information Science (online 2022) · [DOI](https://doi.org/10.1080/13658816.2022.2094385) · cited 14× (OpenAlex, 2026-10-14)*
 
+My thoughts: very novel algorithm and the author's put parellization as future work. They even state that the best performance was in BFS and I saw that there are already algorithms to parallelize BFS, and they work best on highly connected graphs, whihc seems to be what this algorithm creates. However, allocating a tree on the GPU is hard, I think I saw this in Qarah 2019 and how Qarah used a static tree. Not sure how BFS works either in the GPU since it needs a dynamic queue but dynamic datastructures are slow on GPU (also got from Qarah). This paper sites Song 2013 as a very comprehensive summary of the viewshed problem (going to add that to the reading list). it mentions a line-restarization method, something i am not familair with but it simplifes LOS calculatoin (something i could look into). It also mentins a backtrack method that I haven't seen yet and might be in the Song 2013 paper.
+
 The DEM is turned into a tree rooted at the observer. A cell C "view-blocks" B (seen from A) if C lies within a buffer of radius R around segment AB and between A and B (checked with a distance-to-line and two dot-product tests). Each cell's parent is the neighbour that blocks it, with the smallest R chosen if several do. The viewshed is then a depth-first or breadth-first traversal. Each node compares its actual slope with the running minimum visible slope inherited from its parent, so the LOS is never walked explicitly. When several neighbours block a cell, four variants are defined (Quick, Avg, Min, Max view-tree) for how the minimum visible slope is combined. Theoretical cost is O(N²) time and space.
 
 *Work ideas:* The result is an XDraw-like cost (about 10% slower with DFS) with R2-like accuracy, and R is a knob between the two (about 0.5 L behaves like R3/R2, 0.7 L and above like XDraw). The interesting part is that the parent pointers do not depend on the elevations, only on the geometry and the observer cell. So the tree could be built once per observer position and reused across terrains, or the tree shape could be precomputed for a fixed relative layout. For a GPU, depth-first traversal is a poor fit, so the breadth-first variant would map to level-synchronous kernels much like XDraw rings (the tree depth is on the order of the ring count). No GPU version is described, and the paper gives no absolute times, so a GPU port is untested.
@@ -186,3 +217,50 @@ The DEM is turned into a tree rooted at the observer. A cell C "view-blocks" B (
 * *Runtime:* Reported as a ratio to R3 (plots, no absolute times). The text says XDraw is fastest, view-tree DFS about 10% slower than XDraw, view-tree BFS about 19% slower, and R2 about 1.8× XDraw (so the abstract's "40% faster than R2" is consistent with this, *(derived)*). Accuracy vs R3 (loess hilly-gully, average of 15 observers): error rate / omission rate 2.78% / 8.45% for view-tree, 2.80% / 2.68% for R2, 6.56% / 17.07% for XDraw. Across three terrains the averages are 3.88% / 8.30% (view-tree), 4.28% / 2.81% (R2), 8.11% / 20.24% (XDraw). Omission is the weak point: more visible cells are marked invisible than with R2.
 * *Code:* None found.
 * *Leads:* Wu et al. 2021 (PDERL); Zhu et al. 2019 (HiXDraw); Izraelevitz 2003 (backtracking XDraw); Wang, Robinson & White 2000 (reference planes); Kaučič & Žalik 2002 (line rasterization R2); Sánchez-Fernández et al. 2021 (skewed DEM).
+
+<div style="page-break-after: always;"></div>
+
+8. Reference planes (sightline-free sector sweep)
+
+*2000 · Wang, Robinson & White · Generating viewsheds without using sightlines · Photogrammetric Engineering & Remote Sensing 66(1), 87–90 · no DOI · cited: not checked*
+
+My thoughts: this is an approximate algorithm, so im not sure how interested I am in this especially since no accuracy was given. Could be interesting to look at but given that this is like the latest paper I found that works upon it makes me think it's not considered interesting.
+
+A second grid R (same size as the DEM) holds, for each cell, the height a point there would need to be just visible; the viewshed then comes from comparing the DEM height against R. R is seeded from the observer's eight neighbours and filled outwards. For a target d, the reference plane passes through the observer and the two already-processed R cells one step closer to the observer. Its elevation at d is Z, and d is visible if d > Z. R(d) becomes d if visible, otherwise Z, so the next ring inherits the horizon. The DEM is split into eight sectors by the lines through the observer's neighbours, and each sector is processed row-wise or column-wise away from the observer (axis, diagonal and sector cases each have their own formula). Cost is one pass over the grid, so it is constant per observer and does not depend on where the observer sits.
+
+*Work ideas:* This is the origin of the R2/XDraw-style inner-to-outer dependency (Franklin & Ray 1994 is the closest relative), and the sightline-free viewshed that `gdal_viewshed` uses (see summaries.md). The dependency is only on the two cells one step closer, so each ring or column is parallel and the sectors are independent, which is the same structure the GPU XDraw paper exploits. The paper says nothing about GPUs or large grids, so there are no numbers beyond 512².
+
+*Optimizations:*
+* *No interpolation:* the plane is built from grid points of R, so no LOS point is interpolated and no sightline is walked. This is the whole gain over the 1996 version, which still used sightlines for the last step.
+* *Constant time per observer:* the work does not depend on the observer position, whereas the sightline version is cheapest in the middle of the DEM (the table's central-point figure is a best case for it).
+* *Eight sectors:* axis and diagonal cells go first (simple geometry), then each sector is swept in the order that keeps its two inner neighbours already computed.
+* *Caveat:* the plane assumes the surface is locally planar or concave, so the result is approximate. Observers on flat ridges can see less than observers in pits.
+
+* *Type:* Single (the paper also computes the viewshed of every cell to build a visibility index); approximate; reference-plane sweep, sightline-free.
+* *Hardware:* Sun SPARCstation 10/30, C, CPU only; I/O time excluded.
+* *Input / output:* Input is a 400×400 DEM of Snowdonia, Wales (3 to 737 m) and a 512×512 DEM of the FIFE site in Kansas (309 to 463 m); cell size not given in the text I could read. Output is a viewshed per point, plus the visibility index (visible cell count) for every cell.
+* *Runtime:* Wall-clock seconds for one viewpoint. 400×400: 0.4 s new, 0.6 s Franklin & Ray, 26.4 s simplistic sightline (central point). 512×512: 0.7 s, 1.1 s, 48.1 s. About 1.5× vs Franklin & Ray and about 65× vs plain sightlines. No accuracy comparison against an exact method is given.
+* *Code:* None found.
+* *Leads:* Wang, Robinson & White 1996 (the earlier fast local viewshed, PE&RS 62:1157); Franklin & Ray 1994 (Higher isn't necessarily better); Franklin, Ray & Mehta 1994 (technical report); Sorensen & Lee 1993 (two algorithms for partial visibility).
+
+<div style="page-break-after: always;"></div>
+
+9. Regional viewshed by aspect peaks (RVAP)
+
+*2022 · Salehi, Halabian, Ahmadi Beni, Salehi & Dadras · A fast serial computation approach for computing viewshed of a region by detecting key spots on the terrain · Geocarto International · DOI 10.1080/10106049.2022.2129841 · cited: not checked*
+
+This is not a single-observer algorithm. It computes the "viewshed of a region": the union of everything visible from any cell inside a polygon, so it differs from the total viewshed (a per-cell count). The naive way is one viewshed per cell in the region, then overlay. RVAP instead picks a few key cells and runs a viewshed only from those. Steps: (1) compute an aspect map and reclassify it into 8 compass directions, which gives "aspect patches" of same-direction cells; (2) find the highest cell in each patch; (3) drop small patches (under 24,300 m², three 90 m cells) unless their peak is higher than the surrounding patches' peaks (plus observer height), where the dropped patch is merged into its neighbour like a median filter; (4) run a viewshed (Wang et al.'s reference planes, but any algorithm can be swapped in) from each surviving peak and overlay. The idea is that the union is determined by local maxima at slope-direction changes, so the interior cells add nothing.
+
+*Work ideas:* This is a different problem from mine, but it is relevant if the GPU work is ever extended to many observers. It reduces the number of viewsheds rather than the cost of each one, so it stacks with any fast single-observer kernel (the paper deliberately uses the slow, CPU reference-plane code). The "never loses coverage" claim is empirical only: no proof is given, and the key-point rule (patch maximum) is a heuristic, since an observer on a patch edge can see past a patch's own peak. The tests are on one small area, 6.5 × 7 km regions, so ROI size is not stressed (the speedup should drop as the region gets bigger and the surviving key points multiply, but this was not tested). The paper also gives no per-viewshed time, so the actual cost of one reference-plane viewshed has to be derived from the table (about 360 min / 7,560 viewsheds, about 2.9 s each *(derived)*).
+
+*Optimizations:*
+* *Key-point selection:* 25 to 66 viewsheds instead of about 7,500 (0.3 to 0.9% of the cells).
+* *Small-patch elimination:* the only filter, with a fixed 3-pixel area threshold chosen for 90 m data; not tuned or tested at other resolutions.
+* *No parallelism:* serial, CPU only; the authors chose reference planes for availability in libraries, not speed.
+
+* *Type:* Region (many observers merged into one union); claimed exact against the all-cells union, but unproven; aspect-peak key-point selection on top of a Wang et al. reference-plane viewshed.
+* *Hardware:* AMD FX 8370, 8 GB RAM, C++ and Python, CPU only.
+* *Input / output:* Input is SRTM 90 m DEM blocks (13-03 and 15-03, 5° × 5°, Montana/Alberta and Idaho/British Columbia area); six regions of about 6.5 × 7 km (about 7,500 cells each), two sets of slightly / mid / highly rugged by terrain ruggedness index. Observer height 1.8 m, max range 50 km, curvature coefficient 0.85714. Output is a binary region-viewshed raster.
+* *Runtime:* All cells: 321 to 399 min. 5-cell grid interval (every 5th cell in both directions, 1/25 of the cells): 13.5 to 16 min. RVAP: 1.11 to 1.46 min, so about 230 to 290× vs all cells and about 10 to 13× vs the grid interval. Time rises slightly with ruggedness for the first DEM, but the paper's claim that it falls on the second is not what the table shows: 1.46, 1.11, 1.25 min. Accuracy vs all-cells: RVAP 100% in all six; grid interval 75.1 / 53.7 / 32.3% (first DEM) and 42 / 21 / 18% (second DEM), worse on rugged terrain.
+* *Code:* Yes: Mendeley Data, DOI 10.17632/7jwd5nm45n.1 (algorithm and data); not checked.
+* *Leads:* Wang, Robinson & White 2000 (reference planes, see 8); Dungan et al. 2018 (grid-interval cumulative viewshed); Wu et al. 2020 (PDERL); Sánchez-Fernández et al. 2021 (total viewshed on multi-GPU); Tabik et al. 2013, 2015 (band-of-sight); Cervilla et al. 2017 (total 3D viewshed).
