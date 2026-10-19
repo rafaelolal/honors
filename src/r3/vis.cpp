@@ -257,7 +257,6 @@ int compute_viewshed_grid(const Grid* elev_grid, Grid* vis_grid, int vr, int vc,
   int r, c, count = 0;
   for (r = 0; r < elev_grid->nrows; r++) {
     for (c = 0; c < elev_grid->ncols; c++) {
-      // A nice reformat!
       int is_visible = !grid_get_nodata(elev_grid, r, c) &&
                        is_point_visible(elev_grid, r, c, vr, vc, vh);
       count += is_visible;
