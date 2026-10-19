@@ -1,5 +1,5 @@
 CC = g++
-CFLAGS = -g3 -Wall -Wstrict-prototypes
+CFLAGS = -g3 -Wall
 LDFLAGS = -lm
 
 OBJS = grid.o utils.o vis.o vismain.o
