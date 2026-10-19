@@ -7,7 +7,7 @@ OBJS = grid.o utils.o vis.o vismain.o
 vis: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o vis
 
-%.o: %.c
+%.o: %.cpp
 	$(CC) $(CFLAGS) -c $< -o $@
 
 test: vis

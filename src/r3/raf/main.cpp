@@ -24,25 +24,26 @@ Point viewpoint{3, 3};
 double distance(double first_y, double first_x, double second_y,
                 double second_x) {
   // AI recommended this function
+  // ??
   return hypot(second_y - first_y, second_x - first_x);
 }
 
-double zinuth(double viewpoint_y, double viewpoint_x, double viewpoint_height,
+double zenith(double viewpoint_y, double viewpoint_x, double viewpoint_height,
               double target_y, double target_x, double target_height) {
 
   double d = distance(viewpoint_y, viewpoint_x, target_y, target_x);
-  if (d == 0) {
-    return 0;
-  }
+  // if (d == 0) {
+  // return 0;
+  // }
 
   // TOA
   // tan(z) = opposite / adjacent
   // z = atan(opposite / adjacent)
   double height_difference = target_height - viewpoint_height;
-  double z = atan((height_difference) / d);
-  cout << "Calculated zinuth from (" << viewpoint_y << ", " << viewpoint_x
+  double z = atan(height_difference / d);
+  cout << "Calculated zenith from (" << viewpoint_y << ", " << viewpoint_x
        << ") to (" << target_y << ", " << target_x << "): distance: " << d
-       << " height difference: " << (height_difference) << " zinuth: " << z
+       << " height difference: " << (height_difference) << " zenith: " << z
        << " radians" << endl;
   return z;
 }
@@ -93,24 +94,26 @@ int is_visible(const Point& viewpoint, const Point& target,
   assert(target.y >= 0 && target.y < N);
   assert(target.x >= 0 && target.x < N);
 
-  // zinuth from viewpoint to target
-  double main_zinuth =
-      zinuth(viewpoint.y, viewpoint.x, dem[viewpoint.y][viewpoint.x], target.y,
+  // zenith from viewpoint to target
+  // phi in math convention
+  double main_zenith =
+      zenith(viewpoint.y, viewpoint.x, dem[viewpoint.y][viewpoint.x], target.y,
              target.x, dem[target.y][target.x]);
   // 90 degrees
-  assert(main_zinuth >= -PI / 2 && main_zinuth <= PI / 2);
+  assert(main_zenith >= -PI / 2 && main_zenith <= PI / 2);
 
   // horizontal angle from viewpoint to target
   int dy = target.y - viewpoint.y;
   int dx = target.x - viewpoint.x;
-  double alpha = atan(static_cast<double>(dy) / static_cast<double>(dx));
+  // theta in math convention
+  double azimuth = atan(static_cast<double>(dy) / static_cast<double>(dx));
   // 90 degrees
   // TODO: double check if this is correct
-  // assert(alpha >= -PI / 2 && alpha <= PI / 2);
+  // assert(azimuth >= -PI / 2 && azimuth <= PI / 2);
 
   cout << "viewpoint: (" << viewpoint.y << ", " << viewpoint.x << ") target: ("
-       << target.y << ", " << target.x << ") alpha: " << alpha
-       << " main_zinuth: " << main_zinuth << endl;
+       << target.y << ", " << target.x << ") azimuth: " << azimuth
+       << " main_zenith: " << main_zenith << endl;
 
   // Vertical intersections
   int dir_x = dx > 0 ? 1 : -1;
@@ -128,21 +131,21 @@ int is_visible(const Point& viewpoint, const Point& target,
       // Negative angles means I am going backwards, just take abs instead
 
       double y_calc =
-          static_cast<double>(x - viewpoint.x) * tan(alpha) + viewpoint.y;
+          static_cast<double>(x - viewpoint.x) * tan(azimuth) + viewpoint.y;
       cout << "calculated y: (" << y_calc << ", " << x
-           << ") for alpha: " << alpha << endl;
+           << ") for azimuth: " << azimuth << endl;
       double height = interpolate(1, y_calc, x, dem);
       assert(height >= 0);
 
-      double z = zinuth(viewpoint.y, viewpoint.x, dem[viewpoint.y][viewpoint.x],
+      double z = zenith(viewpoint.y, viewpoint.x, dem[viewpoint.y][viewpoint.x],
                         y_calc, x, height);
       cout << "z: " << z << endl;
       // 90 degrees
       assert(z >= -PI / 2 && z <= PI / 2);
 
-      cout << "zinuth between viewpoint and vertical intersection: " << z
-           << " main_zinuth: " << main_zinuth << endl;
-      if (z > main_zinuth) {
+      cout << "zenith between viewpoint and vertical intersection: " << z
+           << " main_zenith: " << main_zenith << endl;
+      if (z > main_zenith) {
         return 0;
       }
     }
@@ -159,21 +162,21 @@ int is_visible(const Point& viewpoint, const Point& target,
     for (int y = viewpoint.y + dir_y; y != target.y; y += dir_y) {
       // x is ray horizontal intersection point x-value
       double x_calc =
-          static_cast<double>(y - viewpoint.y) / tan(alpha) + viewpoint.x;
+          static_cast<double>(y - viewpoint.y) / tan(azimuth) + viewpoint.x;
       cout << "calculated x: (" << y << ", " << x_calc
-           << ") for alpha: " << alpha << endl;
+           << ") for azimuth: " << azimuth << endl;
       double height = interpolate(0, x_calc, y, dem);
       assert(height >= 0);
 
-      double z = zinuth(viewpoint.y, viewpoint.x, dem[viewpoint.y][viewpoint.x],
+      double z = zenith(viewpoint.y, viewpoint.x, dem[viewpoint.y][viewpoint.x],
                         y, x_calc, height);
       cout << "z: " << z << endl;
       // 90 degrees
       assert(z >= -PI / 2 && z <= PI / 2);
 
-      cout << "zinuth between viewpoint and horizontal intersection: " << z
-           << " main_zinuth: " << main_zinuth << endl;
-      if (z > main_zinuth) {
+      cout << "zenith between viewpoint and horizontal intersection: " << z
+           << " main_zenith: " << main_zenith << endl;
+      if (z > main_zenith) {
         return 0;
       }
     }
