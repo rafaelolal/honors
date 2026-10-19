@@ -18,9 +18,9 @@ struct Point {
   int x;
 };
 
-Point viewpoint{6, 6};
+Point viewpoint{3, 3};
 
-// Parameters aren't of type point to keep functions generalizable
+// Parameters aren't of type Point to keep functions generalizable
 double distance(double first_y, double first_x, double second_y,
                 double second_x) {
   // AI recommended this function
@@ -29,10 +29,8 @@ double distance(double first_y, double first_x, double second_y,
 
 double zinuth(double viewpoint_y, double viewpoint_x, double viewpoint_height,
               double target_y, double target_x, double target_height) {
-  cout << "viewpoint_y: " << viewpoint_y << " viewpoint_x: " << viewpoint_x
-       << " target_y: " << target_y << " target_x: " << target_x << endl;
+
   double d = distance(viewpoint_y, viewpoint_x, target_y, target_x);
-  cout << "zinuth d: " << d << endl;
   if (d == 0) {
     return 0;
   }
@@ -40,8 +38,12 @@ double zinuth(double viewpoint_y, double viewpoint_x, double viewpoint_height,
   // TOA
   // tan(z) = opposite / adjacent
   // z = atan(opposite / adjacent)
-  double z = atan((target_height - viewpoint_height) / d);
-  cout << "zinuth z: " << z << endl;
+  double height_difference = target_height - viewpoint_height;
+  double z = atan((height_difference) / d);
+  cout << "Calculated zinuth from (" << viewpoint_y << ", " << viewpoint_x
+       << ") to (" << target_y << ", " << target_x << "): distance: " << d
+       << " height difference: " << (height_difference) << " zinuth: " << z
+       << " radians" << endl;
   return z;
 }
 
@@ -75,7 +77,13 @@ double interpolate(int interpolate_y, double value, int coordinate,
     x_above = v_above;
   }
 
-  return dem[y_below][x_below] * (1.0 - t) + dem[y_above][x_above] * t;
+  double ans = dem[y_below][x_below] * (1.0 - t) + dem[y_above][x_above] * t;
+  cout << "Interpolated between points (" << y_below << ", " << x_below << ", "
+       << dem[y_below][x_below] << ") and (" << y_above << ", " << x_above
+       << ", " << dem[y_above][x_above] << ") with t: " << t
+       << " to get ans: " << ans << endl;
+
+  return ans;
 }
 
 int is_visible(const Point& viewpoint, const Point& target,
@@ -86,10 +94,11 @@ int is_visible(const Point& viewpoint, const Point& target,
   assert(target.x >= 0 && target.x < N);
 
   // zinuth from viewpoint to target
-  double theta = zinuth(viewpoint.y, viewpoint.x, dem[viewpoint.y][viewpoint.x],
-                        target.y, target.x, dem[target.y][target.x]);
+  double main_zinuth =
+      zinuth(viewpoint.y, viewpoint.x, dem[viewpoint.y][viewpoint.x], target.y,
+             target.x, dem[target.y][target.x]);
   // 90 degrees
-  assert(theta >= -PI / 2 && theta <= PI / 2);
+  assert(main_zinuth >= -PI / 2 && main_zinuth <= PI / 2);
 
   // horizontal angle from viewpoint to target
   int dy = target.y - viewpoint.y;
@@ -101,7 +110,7 @@ int is_visible(const Point& viewpoint, const Point& target,
 
   cout << "viewpoint: (" << viewpoint.y << ", " << viewpoint.x << ") target: ("
        << target.y << ", " << target.x << ") alpha: " << alpha
-       << " theta: " << theta << endl;
+       << " main_zinuth: " << main_zinuth << endl;
 
   // Vertical intersections
   int dir_x = dx > 0 ? 1 : -1;
@@ -111,12 +120,17 @@ int is_visible(const Point& viewpoint, const Point& target,
   if (viewpoint.x == target.x) {
     cout << "Vertical line, skipping vertical intersections" << endl;
   } else {
-    for (int x = viewpoint.x; x != target.x; x += dir_x) {
+    // Adding dir_x to initial x only because we don't want to check the
+    // viewpoint itself, and we want to check the target up to before the target
+    // itself.
+    for (int x = viewpoint.x + dir_x; x != target.x; x += dir_x) {
       // y is ray vertical intersection point y-value
       // Negative angles means I am going backwards, just take abs instead
 
       double y_calc =
           static_cast<double>(x - viewpoint.x) * tan(alpha) + viewpoint.y;
+      cout << "calculated y: (" << y_calc << ", " << x
+           << ") for alpha: " << alpha << endl;
       double height = interpolate(1, y_calc, x, dem);
       assert(height >= 0);
 
@@ -126,7 +140,9 @@ int is_visible(const Point& viewpoint, const Point& target,
       // 90 degrees
       assert(z >= -PI / 2 && z <= PI / 2);
 
-      if (z > theta) {
+      cout << "zinuth between viewpoint and vertical intersection: " << z
+           << " main_zinuth: " << main_zinuth << endl;
+      if (z > main_zinuth) {
         return 0;
       }
     }
@@ -140,12 +156,12 @@ int is_visible(const Point& viewpoint, const Point& target,
   if (viewpoint.y == target.y) {
     cout << "Horizontal line, skipping horizontal intersections" << endl;
   } else {
-    for (int y = viewpoint.y; y != target.y; y += dir_y) {
+    for (int y = viewpoint.y + dir_y; y != target.y; y += dir_y) {
       // x is ray horizontal intersection point x-value
       double x_calc =
           static_cast<double>(y - viewpoint.y) / tan(alpha) + viewpoint.x;
-      cout << "calculated x: " << x_calc << " for y: " << y
-           << " alpha: " << alpha << endl;
+      cout << "calculated x: (" << y << ", " << x_calc
+           << ") for alpha: " << alpha << endl;
       double height = interpolate(0, x_calc, y, dem);
       assert(height >= 0);
 
@@ -155,7 +171,9 @@ int is_visible(const Point& viewpoint, const Point& target,
       // 90 degrees
       assert(z >= -PI / 2 && z <= PI / 2);
 
-      if (z > theta) {
+      cout << "zinuth between viewpoint and horizontal intersection: " << z
+           << " main_zinuth: " << main_zinuth << endl;
+      if (z > main_zinuth) {
         return 0;
       }
     }
@@ -177,7 +195,9 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  dem[6][6] = 10;
+  // Was here for testing purposes to see if the whole terrain would be visible
+  // from a huge viewpoint
+  // dem[3][3] = 10;
 
   int viewshed[N][N] = {};
 
