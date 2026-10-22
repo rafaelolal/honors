@@ -1,5 +1,5 @@
-#include "vis.h"
 #include "grid.h"
+#include "vis.h"
 #include <cassert>
 #include <iostream>
 #include <math.h>
