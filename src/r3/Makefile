@@ -1,18 +1,37 @@
-CC = g++
-CFLAGS = -g3 -Wall
-LDFLAGS = -lm
+PLATFORM = $(shell uname)
 
-OBJS = grid.o utils.o vis.o vismain.o
+PROGRAMS = vis
 
-vis: $(OBJS)
-	$(CC) $(OBJS) $(LDFLAGS) -o vis
+DEFAULT: $(PROGRAMS)
 
-%.o: %.cpp
-	$(CC) $(CFLAGS) -c $< -o $@
+#### EXPERIMENTS MODE 
+#### using -DNDEBUG turns asserts off. Use it only for timing. 
+##CFLAGS = -m64 -Winline -DNDEBUG -O3 -Wall 
 
-test: vis
-	./vis data/flat.asc out.flat.asc 5 5 1
-	./vis data/wall.asc out.wall.asc 5 0 1
+#DEBUG MODE 
+CFLAGS = -m64 -Winline -g -O3 -Wall
 
-clean:
-	$(RM) *.o vis out.*.asc
+CC = g++ $(CFLAGS)
+
+LIBS = -lm
+
+vis:  vismain.o vis.o map.o  grid.o pixel_buffer.o
+	$(CC) -o $@ vismain.o vis.o map.o  grid.o pixel_buffer.o $(LIBS)
+
+vismain.o: vismain.cpp vis.h map.h  grid.h  pixel_buffer.h stb_image_write.h
+	$(CC) $(CFLAGS) -o $@ -c vismain.cpp 
+
+vis.o: vis.cpp vis.h grid.h 
+	$(CC) $(CFLAGS) -o $@ -c vis.cpp
+
+map.o: map.cpp map.h grid.h pixel_buffer.h stb_image_write.h
+	$(CC) $(CFLAGS) -o $@ -c map.cpp
+
+grid.o: grid.cpp grid.h
+	$(CC) $(CFLAGS) -o $@ -c grid.cpp
+
+pixel_buffer.o: pixel_buffer.cpp pixel_buffer.h stb_image_write.h
+	$(CC) $(CFLAGS) -o $@ -c pixel_buffer.cpp
+
+clean: 
+	rm -f *.o $(PROGRAMS)

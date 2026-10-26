@@ -5,8 +5,6 @@
 #include <math.h>
 #include <stdio.h>
 
-extern int DEBUG_LEVEL;
-
 using namespace std;
 
 /* ---------------------------------------------------------------------------
@@ -37,9 +35,6 @@ using namespace std;
    Return 1 unconditionally to start, look at the output, then tighten it.
 --------------------------------------------------------------------------- */
 
-// constexpr is const and known at compile time??
-// 50 meters
-constexpr int SCALE = 50;
 constexpr float PI = 3.141592653589793;
 
 struct Point {
@@ -88,16 +83,20 @@ float interpolate(int interpolate_y, float value, int coordinate,
                   const Grid* dem) {
   assert(interpolate_y == 0 || interpolate_y == 1);
   assert(dem);
-  int size = interpolate_y == 1 ? dem->nrows : dem->ncols;
-  assert(coordinate >= 0 && coordinate < size);
+  assert(coordinate >= 0);
+  int horizontal_size = interpolate_y == 0 ? dem->nrows : dem->ncols;
+  assert(coordinate < horizontal_size);
 
   assert(value >= 0);
   int v_below = static_cast<int>(value);
   int v_above = v_below + 1;
-  assert(v_below >= 0 && v_below < size);
-  assert(v_above >= 0 && v_above < size);
+  assert(v_below >= 0);
+  assert(v_above >= 0);
+  int vertical_size = interpolate_y == 1 ? dem->nrows : dem->ncols;
+  assert(v_below < vertical_size);
+  assert(v_above < vertical_size);
 
-  int t = value - v_below;
+  float t = value - v_below;
   assert(t >= 0 && t <= 1);
   int y_below, y_above, x_below, x_above;
   if (interpolate_y == 1) {
@@ -112,8 +111,8 @@ float interpolate(int interpolate_y, float value, int coordinate,
     x_above = v_above;
   }
 
-  if (grid_get_nodata(dem, y_below, x_below) ||
-      grid_get_nodata(dem, y_above, x_above)) {
+  if (grid_is_nodata(dem, y_below, x_below) ||
+      grid_is_nodata(dem, y_above, x_above)) {
     return dem->nodata_value;
   }
 
@@ -130,35 +129,32 @@ float interpolate(int interpolate_y, float value, int coordinate,
 
 int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
                      float vh) {
-  assert(vr >= 0 && vr < elev_grid->nrows);
-  assert(vc >= 0 && vc < elev_grid->ncols);
-  assert(r >= 0 && r < elev_grid->nrows);
-  assert(c >= 0 && c < elev_grid->ncols);
+
+  if (grid_is_nodata(elev_grid, r, c)) {
+    return elev_grid->nodata_value;
+  }
 
   if (vr == r && vc == c) {
     return 1;
   }
 
+  float vz = grid_get(elev_grid, vr, vc) + vh;
+  float pz = grid_get(elev_grid, r, c);
+
   // altitude from viewpoint to target
   // phi in math convention
-  float los_altitude = altitude(vr, vc, grid_get(elev_grid, vr, vc), r, c,
-                                grid_get(elev_grid, r, c));
-
+  float los_altitude = altitude(vr, vc, vz, r, c, pz);
   // 90 degrees
   assert(los_altitude >= -PI / 2 && los_altitude <= PI / 2);
 
   // horizontal angle from viewpoint to target
-  int dy = r - vr;
-  int dx = c - vc;
-  // theta in math convention
-  float azimuth = atan(static_cast<float>(dy) / static_cast<float>(dx));
-  // 90 degrees
-  // TODO: double check if this is correct
-  // assert(azimuth >= -PI / 2 && azimuth <= PI / 2);
+  float dy = r - vr;
+  float dx = c - vc;
+  float slope = dy / dx;
 
   if (DEBUG_LEVEL == 1) {
     cout << "viewpoint: (" << vr << ", " << vc << ") target: (" << r << ", "
-         << c << ") azimuth: " << azimuth << " los_altitude: " << los_altitude
+         << c << ") slope: " << slope << " los_altitude: " << los_altitude
          << endl;
   }
 
@@ -168,77 +164,61 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
   if (DEBUG_LEVEL == 1) {
     cout << "y_calcs" << endl;
   }
-  // TODO: need to immediately get rid of this if!!!!!
-  if (vc != c) {
-    // Adding dir_x to initial x only because we don't want to check the
-    // viewpoint itself, and we want to check the target up to before the target
-    // itself.
-    for (int x = vc + dir_x; x != c; x += dir_x) {
-      // y is ray vertical intersection point y-value
-      // Negative angles means I am going backwards, just take abs instead
+  for (int x = vc; x != c; x += dir_x) {
+    // Skip first iteration, could literally just do
+    // x = vc + dir_x, but that leads to bugs when x overshoots c since I am
+    // checking x != c instead of x < c or x > c
+    if (x == vc) {
+      continue;
+    }
+    // y is ray vertical intersection point y-value
+    float y_calc = vr + static_cast<float>(x - vc) * slope;
+    float height = interpolate(1, y_calc, x, elev_grid);
+    if (height == elev_grid->nodata_value) {
+      return elev_grid->nodata_value;
+    }
 
-      float y_calc = static_cast<float>(x - vc) * tan(azimuth) + vr;
-      if (DEBUG_LEVEL == 1) {
-        cout << "calculated y: (" << y_calc << ", " << x
-             << ") for azimuth: " << azimuth << endl;
-      }
-      float height = interpolate(1, y_calc, x, elev_grid);
-      if (height == elev_grid->nodata_value) {
-        return NOT_VISIBLE;
-      }
-      assert(height >= 0);
+    float z = altitude(vr, vc, vz, y_calc, x, height);
+    // 90 degrees
+    assert(z >= -PI / 2 && z <= PI / 2);
 
-      float z =
-          altitude(vr, vc, grid_get(elev_grid, vr, vc), y_calc, x, height);
-      // 90 degrees
-      assert(z >= -PI / 2 && z <= PI / 2);
+    if (DEBUG_LEVEL == 1) {
+      cout << "altitude between viewpoint and vertical intersection: " << z
+           << " los_altitude: " << los_altitude << endl;
+    }
 
-      if (DEBUG_LEVEL == 1) {
-        cout << "altitude between viewpoint and vertical intersection: " << z
-             << " los_altitude: " << los_altitude << endl;
-      }
-
-      if (z > los_altitude) {
-        return NOT_VISIBLE;
-      }
+    if (z > los_altitude) {
+      return NOT_VISIBLE;
     }
   }
 
   int dir_y = r - vr > 0 ? 1 : -1;
   // Horizontal intersections
-  // Start one away in the direction of target, and move towards it
   if (DEBUG_LEVEL == 1) {
     cout << "x_calcs" << endl;
   }
-  // TODO: need to immediately get rid of this if!!!!!
-  if (vr != r) {
-    for (int y = vr + dir_y; y != r; y += dir_y) {
-      // x is ray horizontal intersection point x-value
-      float x_calc = static_cast<float>(y - vr) / tan(azimuth) + vc;
-      if (DEBUG_LEVEL == 1) {
-        cout << "calculated x: (" << y << ", " << x_calc
-             << ") for azimuth: " << azimuth << endl;
-      }
-      float height = interpolate(0, x_calc, y, elev_grid);
-      if (height == elev_grid->nodata_value) {
-        // TODO: what value to return here?
-        return NOT_VISIBLE;
-      }
-      assert(height >= 0);
+  for (int y = vr; y != r; y += dir_y) {
+    if (y == vr) {
+      continue;
+    }
+    // x is ray horizontal intersection point x-value
+    float x_calc = vc + static_cast<float>(y - vr) / slope;
+    float height = interpolate(0, x_calc, y, elev_grid);
+    if (height == elev_grid->nodata_value) {
+      return elev_grid->nodata_value;
+    }
 
-      float z =
-          altitude(vr, vc, grid_get(elev_grid, vr, vc), y, x_calc, height);
-      // 90 degrees
-      assert(z >= -PI / 2 && z <= PI / 2);
+    float z = altitude(vr, vc, vz, y, x_calc, height);
+    // 90 degrees
+    assert(z >= -PI / 2 && z <= PI / 2);
 
-      if (DEBUG_LEVEL == 1) {
-        cout << "altitude between viewpoint and horizontal intersection: " << z
-             << " los_altitude: " << los_altitude << endl;
-      }
+    if (DEBUG_LEVEL == 1) {
+      cout << "altitude between viewpoint and horizontal intersection: " << z
+           << " los_altitude: " << los_altitude << endl;
+    }
 
-      if (z > los_altitude) {
-        return NOT_VISIBLE;
-      }
+    if (z > los_altitude) {
+      return NOT_VISIBLE;
     }
   }
 
@@ -251,14 +231,18 @@ int compute_viewshed_grid(const Grid* elev_grid, Grid* vis_grid, int vr, int vc,
   assert(vr >= 0 && vr < elev_grid->nrows);
   assert(vc >= 0 && vc < elev_grid->ncols);
   // The viewpoint must be a valid point in the grid, not a nodata value
-  assert(!grid_get_nodata(elev_grid, vr, vc));
+  assert(!grid_is_nodata(elev_grid, vr, vc));
   assert(vh >= 0);
 
   int r, c, count = 0;
   for (r = 0; r < elev_grid->nrows; r++) {
     for (c = 0; c < elev_grid->ncols; c++) {
-      int is_visible = !grid_get_nodata(elev_grid, r, c) &&
-                       is_point_visible(elev_grid, r, c, vr, vc, vh);
+      if (grid_is_nodata(elev_grid, r, c)) {
+        grid_set(vis_grid, r, c, elev_grid->nodata_value);
+        continue;
+      }
+
+      int is_visible = is_point_visible(elev_grid, r, c, vr, vc, vh);
       count += is_visible;
       grid_set(vis_grid, r, c, is_visible);
 

@@ -1,37 +1,89 @@
-/* Utilities for grid files and in-memory grids */
-
-#include "grid.h"
-#include "utils.h"
+// Laura Toma
+//
 #include <assert.h>
+#include <float.h>
 #include <limits.h>
+#include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-// Returns an empty grid object.
+#include "grid.h"
+
+/* ************************************************************ */
+void grid_print_stats(const Grid* g, char* name) {
+
+  printf("grid %s: \n\tn=%ld [rows=%d,cols=%d], range=[%.2f, %.2f], "
+         "NODATA values=%d (%.2f percent)\n",
+         name, (long int)g->nrows * (long int)g->ncols, g->nrows, g->ncols,
+         g->min_value, g->max_value, g->nb_nodata_values,
+         100.0 * ((double)g->nb_nodata_values) / ((double)g->nrows * g->ncols));
+}
+
+// Returns an empty grid object
 Grid* grid_init() {
-  Grid* grid = (Grid*)malloc(sizeof(Grid));
+  Grid* grid;
+  grid = (Grid*)malloc(sizeof(Grid));
   assert(grid);
   grid->data = NULL;
-  grid->nrows = 0;
-  grid->ncols = 0;
-  grid->xllcorner = 0.0;
-  grid->yllcorner = 0.0;
-  grid->cellsize = 0.0;
-  grid->nodata_value = 0.0;
-  grid->min_value = INT_MAX;
-  grid->max_value = -INT_MAX;
+  grid->min_value = (float)INT_MAX;
+  grid->max_value = (float)-INT_MAX;
+  grid->nb_nodata_values = 0;
   return grid;
 }
 
+// grid must be allocated
 void grid_read_header(FILE* in_file, Grid* grid) {
-  // float xllcornerf, yllcornerf, cellsizef;
 
+  assert(grid);
   assert(fscanf(in_file, "ncols %d\n", &grid->ncols));
   assert(fscanf(in_file, "nrows %d\n", &grid->nrows));
   assert(fscanf(in_file, "xllcorner %f\n", &grid->xllcorner));
   assert(fscanf(in_file, "yllcorner %f\n", &grid->yllcorner));
   assert(fscanf(in_file, "cellsize %f\n", &grid->cellsize));
   assert(fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value));
+}
+
+// allocate space for the grid data.
+void grid_malloc_data(Grid* grid) {
+  if (!grid->data) {
+    grid->data = (float*)malloc(grid->nrows * grid->ncols * sizeof(float));
+    assert(grid->data);
+  }
+}
+
+void grid_read_data(FILE* in_file, Grid* grid) {
+  float val;
+  for (int r = 0; r < grid->nrows; r++) {
+    for (int c = 0; c < grid->ncols; c++) {
+      assert(fscanf(in_file, "%f ", &val));
+      // TODO: before, I was doing val / grid->cellsize, but that was messing up
+      // the hillshade and I removed it and the code still works :/
+      grid_set(grid, r, c, val);
+    } // for c
+  } // for r
+}
+
+// Read grid from file and return it
+Grid* grid_read(FILE* in_file) {
+  Grid* grid = grid_init();
+  grid_read_header(in_file, grid);
+  grid_malloc_data(grid);
+  grid_read_data(in_file, grid);
+  return grid;
+}
+
+// read from file
+Grid* grid_read_from_file(char* filename) {
+
+  FILE* infile = fopen(filename, "r");
+  if (!infile) {
+    printf("cannot open file %s\n", filename);
+    exit(1);
+  }
+  Grid* grid = grid_read(infile);
+  fclose(infile);
+  return grid;
 }
 
 void grid_write_header(FILE* out_file, Grid* grid) {
@@ -43,26 +95,38 @@ void grid_write_header(FILE* out_file, Grid* grid) {
   fprintf(out_file, "NODATA_value %f\n", grid->nodata_value);
 }
 
+// Write the complete asc file for a grid.
+void grid_write(FILE* out_file, Grid* grid) {
+
+  grid_write_header(out_file, grid);
+  for (int r = 0; r < grid->nrows; r++) {
+    for (int c = 0; c < grid->ncols; c++) {
+      fprintf(out_file, "%f ", grid_get(grid, r, c));
+    }
+    fprintf(out_file, "\n");
+  }
+}
+
+// Write the complete asc file for a grid.
+void grid_write_to_file(char* filename, Grid* grid) {
+
+  FILE* outfile = fopen(filename, "w+");
+  if (!outfile) {
+    printf("cannot open file %s\n", filename);
+    exit(1);
+  }
+  grid_write(outfile, grid);
+  fclose(outfile);
+}
+
 void grid_copy_header(Grid* grid, Grid* new_grid) {
+  assert(grid && new_grid);
   new_grid->ncols = grid->ncols;
   new_grid->nrows = grid->nrows;
   new_grid->xllcorner = grid->xllcorner;
   new_grid->yllcorner = grid->yllcorner;
   new_grid->cellsize = grid->cellsize;
   new_grid->nodata_value = grid->nodata_value;
-}
-
-// Ensure that we have allocated space for the grid data.
-void grid_malloc_data(Grid* grid) {
-  if (!grid->data) {
-    grid->data = (float**)malloc(grid->nrows * sizeof(float*));
-    assert(grid->data);
-    int r;
-    for (r = 0; r < grid->nrows; r++) {
-      grid->data[r] = (float*)malloc(grid->ncols * sizeof(float));
-      assert(grid->data[r]);
-    }
-  }
 }
 
 // Initialize a grid based on an existing grid, copying e.g. its dimensions.
@@ -73,139 +137,8 @@ Grid* grid_init_from(Grid* grid) {
   return new_grid;
 }
 
-// Initialize an empty grid based on an existing grid, but with new dimensions.
-Grid* grid_init_from_sized(Grid* grid, int nrows, int ncols) {
-  Grid* new_grid = grid_init();
-  grid_copy_header(grid, new_grid);
-  new_grid->nrows = nrows;
-  new_grid->ncols = ncols;
-  grid_malloc_data(new_grid);
-  return new_grid;
-}
-
 // Free a grid and its associated malloced data;
 void grid_free(Grid* grid) {
-  int r;
-  for (r = 0; r < grid->nrows; r++) {
-    free(grid->data[r]);
-  }
   free(grid->data);
   free(grid);
-}
-
-// Returns the value at the specified point in the grid.
-float grid_get(const Grid* grid, int r, int c) { return grid->data[r][c]; }
-
-// Sets the value at the specified point in the grid.
-void grid_set(Grid* grid, int r, int c, float val) {
-  grid->data[r][c] = val;
-  if (val != grid->nodata_value) {
-    grid->data[r][c] = val / grid->cellsize;
-    grid->min_value = minf(val, grid->min_value);
-    grid->max_value = maxf(val, grid->max_value);
-  }
-}
-
-// Returns true iff the point on the grid has a nodata elev value.
-bool grid_get_nodata(const Grid* grid, int r, int c) {
-  return grid->nodata_value == grid_get(grid, r, c);
-}
-
-// Marks the specified point as having nodata.
-void grid_set_nodata(Grid* grid, int r, int c) {
-  grid_set(grid, r, c, grid->nodata_value);
-}
-
-void grid_read_data(FILE* in_file, Grid* grid) {
-  int r, c;
-  float val;
-  for (r = 0; r < grid->nrows; r++) {
-    for (c = 0; c < grid->ncols; c++) {
-      assert(fscanf(in_file, "%f ", &val));
-      grid_set(grid, r, c, val);
-    }
-  }
-}
-
-// Returns a grid read in from a given asc file.
-Grid* grid_read(FILE* in_file) {
-  Grid* grid = grid_init();
-  grid_read_header(in_file, grid);
-  grid_malloc_data(grid);
-  grid_read_data(in_file, grid);
-  return grid;
-}
-
-// Returns a sample of the grid read in from the given asc file. If either
-// nrows or ncols of the grid data is greater than max_side, downsamples the
-// the grid so that nrows and ncols are less than max_side in the returned
-// grid. If neither nrows or ncols of the grid data are greater than max_side,
-// this function returns the same valuea as grid_read.
-Grid* grid_read_simp(FILE* in_file, int max_side) {
-  Grid* grid;
-  int r, c;
-  float val;
-
-  grid = grid_init();
-  grid_read_header(in_file, grid);
-
-  // ratio of actual to max {rows,cols}
-  float row_ratio = ((float)grid->nrows) / ((float)max_side);
-  float col_ratio = ((float)grid->ncols) / ((float)max_side);
-
-  // fail fast to simple case of not needing simplification
-  if (row_ratio <= 1.0 && col_ratio <= 1.0) {
-    grid_malloc_data(grid);
-    grid_read_data(in_file, grid);
-    return grid;
-  }
-
-  // otherwise we need to simplify
-  // round up the largest ratio to get the size of the stride we will need
-  // across both rows and colums to achieve the simplification while
-  // maintaining perspective. keep the number of raw {rows,cols} for reference
-  int raw_nrows = grid->nrows;
-  int raw_ncols = grid->ncols;
-  int stride = ((int)maxf(row_ratio, col_ratio)) + 1;
-  grid->nrows = (grid->nrows / stride) + 1;
-  grid->ncols = (grid->ncols / stride) + 1;
-
-  // malloc data to hold only the simplified grid
-  grid_malloc_data(grid);
-
-  // do the actual reading and sample grid construction, being mindful of the
-  // stride. note that there is no getting around fscanf'ing every elev value in
-  // the  raw file
-  for (r = 0; r < raw_nrows; r++) {
-    for (c = 0; c < raw_ncols; c++) {
-      assert(fscanf(in_file, "%f ", &val));
-      if ((r % stride == 0) && (c % stride == 0)) {
-        grid_set(grid, r / stride, c / stride, val);
-      }
-    }
-  }
-  return grid;
-}
-
-// Write the complete asc file for a grid.
-void grid_write(FILE* out_file, Grid* grid) {
-  int r, c;
-  grid_write_header(out_file, grid);
-  for (r = 0; r < grid->nrows; r++) {
-    for (c = 0; c < grid->ncols; c++) {
-      fprintf(out_file, "%f ", grid_get(grid, r, c));
-    }
-    fprintf(out_file, "\n");
-  }
-}
-
-// Pack a r,c pair into a single int.
-long long int grid_pack_rcpair(Grid* grid, int r, int c) {
-  return (long long int)(grid->ncols * r) + c;
-}
-
-// Unpack a r,c pair from a single int, as packed above.
-void grid_unpack_rcpair(Grid* grid, long long int rcpair, int* r, int* c) {
-  *c = (int)(rcpair % grid->ncols);
-  *r = (int)((rcpair - *c) / grid->ncols);
 }

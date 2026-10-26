@@ -1,4 +1,4 @@
-/* 
+/*
 MIT License
 
 Copyright (c) 2023 Caspian Ahlberg
@@ -28,7 +28,6 @@ SOFTWARE.
 
 #include <stdint.h>
 
-
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -39,10 +38,9 @@ typedef int16_t i16;
 typedef int32_t i32;
 typedef int64_t i64;
 
-
 typedef struct {
-	u32* const pixels;
-	const u16 width, height;
+  u32* const pixels;
+  const u16 width, height;
 } PixelBuffer;
 
 //////////
@@ -51,9 +49,10 @@ PixelBuffer init_pixel_buffer(const u16 width, const u16 height);
 
 void deinit_pixel_buffer(const PixelBuffer* const pb);
 
-void write_pixel_to_buffer(const PixelBuffer* const pb,
-	const u16 x, const u16 y, const u8 r, const u8 g, const u8 b);
+void write_pixel_to_buffer(const PixelBuffer* const pb, const u16 x,
+                           const u16 y, const u8 r, const u8 g, const u8 b);
 
-void save_pixel_buffer_to_file(const PixelBuffer* const pb, const char* const filename);
+void save_pixel_buffer_to_file(const PixelBuffer* const pb,
+                               const char* const filename);
 
 #endif
