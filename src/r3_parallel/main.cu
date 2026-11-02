@@ -15,7 +15,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <filesystem>
 #include <iostream>
+#include <string>
 
 using namespace std;
 
@@ -36,6 +38,7 @@ typedef struct _grid {
   unsigned int ncols;
   unsigned int nrows;
   float* data;
+  float* d_data;
 
   float xllcorner;
   float yllcorner;
@@ -205,12 +208,6 @@ float altitude(float viewpoint_y, float viewpoint_x, float viewpoint_height,
   // z = atan(opposite / adjacent)
   float height_difference = target_height - viewpoint_height;
   float z = atan(height_difference / d);
-  if (DEBUG_LEVEL == 1) {
-    cout << "Calculated altitude from (" << viewpoint_y << ", " << viewpoint_x
-         << ") to (" << target_y << ", " << target_x << "): distance: " << d
-         << " height difference: " << (height_difference) << " altitude: " << z
-         << " radians" << endl;
-  }
   return z;
 }
 
@@ -257,30 +254,27 @@ float interpolate(int interpolate_y, float value, int coordinate,
 
   float ans = grid_get(dem, y_below, x_below) * (1.0 - t) +
               grid_get(dem, y_above, x_above) * t;
-  if (DEBUG_LEVEL == 1) {
-    cout << "Interpolated between points (" << y_below << ", " << x_below
-         << ", " << grid_get(dem, y_below, x_below) << ") and (" << y_above
-         << ", " << x_above << ", " << grid_get(dem, y_above, x_above)
-         << ") with t: " << t << " to get ans: " << ans << endl;
-  }
   return ans;
 }
 
 /* elev_grid: input elevation grid
+   vis_grid: output visibility grid   
    r, c:      the point being tested
    vr, vc:    viewpoint row and column
    vh:        viewpoint height ABOVE the terrain at (vr,vc)
    returns VISIBLE if (r,c) is visible from the viewpoint, NOT_VISIBLE otherwise
  */
-int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
+void is_point_visible(const Grid* elev_grid, Grid* vis_grid, int r, int c, int vr, int vc,
                      float vh) {
 
   if (grid_is_nodata(elev_grid, r, c)) {
-    return elev_grid->nodata_value;
+    grid_set(vis_grid, r, c, elev_grid->nodata_value);
+    return;
   }
 
   if (vr == r && vc == c) {
-    return 1;
+    grid_set(vis_grid, r, c, VISIBLE);
+    return;
   }
 
   float vz = grid_get(elev_grid, vr, vc) + vh;
@@ -297,18 +291,9 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
   float dx = c - vc;
   float slope = dy / dx;
 
-  if (DEBUG_LEVEL == 1) {
-    cout << "viewpoint: (" << vr << ", " << vc << ") target: (" << r << ", "
-         << c << ") slope: " << slope << " los_altitude: " << los_altitude
-         << endl;
-  }
-
   // Vertical intersections
   int dir_x = dx > 0 ? 1 : -1;
   // Start one away in the direction of target, and move towards it
-  if (DEBUG_LEVEL == 1) {
-    cout << "y_calcs" << endl;
-  }
   for (int x = vc; x != c; x += dir_x) {
     // Skip first iteration, could literally just do
     // x = vc + dir_x, but that leads to bugs when x overshoots c since I am
@@ -320,28 +305,22 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
     float y_calc = vr + static_cast<float>(x - vc) * slope;
     float height = interpolate(1, y_calc, x, elev_grid);
     if (height == elev_grid->nodata_value) {
-      return elev_grid->nodata_value;
+      grid_set(vis_grid, r, c, elev_grid->nodata_value);
+      return;
     }
 
     float z = altitude(vr, vc, vz, y_calc, x, height);
     // 90 degrees
     assert(z >= -PI / 2 && z <= PI / 2);
 
-    if (DEBUG_LEVEL == 1) {
-      cout << "altitude between viewpoint and vertical intersection: " << z
-           << " los_altitude: " << los_altitude << endl;
-    }
-
     if (z > los_altitude) {
-      return NOT_VISIBLE;
+      grid_set(vis_grid, r, c, NOT_VISIBLE);
+      return;
     }
   }
 
   int dir_y = r - vr > 0 ? 1 : -1;
   // Horizontal intersections
-  if (DEBUG_LEVEL == 1) {
-    cout << "x_calcs" << endl;
-  }
   for (int y = vr; y != r; y += dir_y) {
     if (y == vr) {
       continue;
@@ -350,20 +329,17 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
     float x_calc = vc + static_cast<float>(y - vr) / slope;
     float height = interpolate(0, x_calc, y, elev_grid);
     if (height == elev_grid->nodata_value) {
-      return elev_grid->nodata_value;
+      grid_set(vis_grid, r, c, elev_grid->nodata_value);
+      return;
     }
 
     float z = altitude(vr, vc, vz, y, x_calc, height);
     // 90 degrees
     assert(z >= -PI / 2 && z <= PI / 2);
 
-    if (DEBUG_LEVEL == 1) {
-      cout << "altitude between viewpoint and horizontal intersection: " << z
-           << " los_altitude: " << los_altitude << endl;
-    }
-
     if (z > los_altitude) {
-      return NOT_VISIBLE;
+      grid_set(vis_grid, r, c, NOT_VISIBLE);
+      return;
     }
   }
 
@@ -383,10 +359,6 @@ int compute_viewshed_grid(const Grid* elev_grid, Grid* vis_grid, int vr, int vc,
   int r, c, count = 0;
   for (r = 0; r < elev_grid->nrows; r++) {
     for (c = 0; c < elev_grid->ncols; c++) {
-      if (grid_is_nodata(elev_grid, r, c)) {
-        grid_set(vis_grid, r, c, elev_grid->nodata_value);
-        continue;
-      }
 
       int is_visible = is_point_visible(elev_grid, r, c, vr, vc, vh);
       count += is_visible;
@@ -760,8 +732,7 @@ void pixelbuffer_overlay(PixelBuffer pb1, PixelBuffer pb2, float alpha) {
 
 //  Reads command line arguments
 void parseArguments(int argc, char* const* argv, char** elev_name,
-                    char** vis_name, int* vr, int* vc, float* vh,
-                    int* debug_level) {
+                    char** vis_name, int* vr, int* vc, float* vh) {
 
   const char usage[] =
       "Usage: %s -e <elev.asc> -v <vis.asc> -r <vr> -c <vc> [-h <vh>] [-d "
@@ -777,7 +748,6 @@ void parseArguments(int argc, char* const* argv, char** elev_name,
   *elev_name = *vis_name = NULL;
   *vr = *vc = -1;
   *vh = 0;
-  *debug_level = 0;
 
   int c;
   while ((c = getopt(argc, argv, "e:v:r:c:h:d:")) != -1) {
@@ -797,9 +767,6 @@ void parseArguments(int argc, char* const* argv, char** elev_name,
     case 'h':
       *vh = atof(optarg); // viewpoint height above ground
       break;
-    case 'd':
-      *debug_level = atoi(optarg); // debug level
-      break;
     default:
       printf("Illegal option given\n");
       exit(2);
@@ -815,8 +782,6 @@ void parseArguments(int argc, char* const* argv, char** elev_name,
     error = "viewpoint row cannot be <0";
   else if (*vc < 0)
     error = "viewpoint col cannot be <0";
-  else if (*debug_level < 0)
-    error = "debug level cannot be <0";
   else if (*vh < 0)
     error = "viewpoint height cannot be <0";
 
@@ -833,12 +798,16 @@ int main(int argc, char** argv) {
   char *elev_name, *vis_name;
   int vr, vc;
   float vh;
-  parseArguments(argc, argv, &elev_name, &vis_name, &vr, &vc, &vh,
-                 &DEBUG_LEVEL);
+  parseArguments(argc, argv, &elev_name, &vis_name, &vr, &vc, &vh);
   printf("running with arguments:\n\telev_name: %s \n\tvis_name: %s\n\tvp=(%d, "
-         "%d, %.1f)\n\tdebug_level: %d\n",
-         elev_name, vis_name, vr, vc, vh, DEBUG_LEVEL);
+         "%d, %.1f)\n",
+         elev_name, vis_name, vr, vc, vh);
   fflush(stdout);
+
+  // all outputs go in out/, relative to where the program is run
+  std::filesystem::create_directories("out");
+  std::string vis_path =
+      "out/" + std::filesystem::path(vis_name).filename().string();
 
   // read elevation grid
   printf("reading %s\n", elev_name);
@@ -851,8 +820,8 @@ int main(int argc, char** argv) {
   grid_print_stats(vis_grid, vis_name);
 
   // write viewshed grid
-  printf("writing %s\n", vis_name);
-  grid_write_to_file(vis_name, vis_grid);
+  printf("writing %s\n", vis_path.c_str());
+  grid_write_to_file(vis_path.c_str(), vis_grid);
 
   // CREATE BITMAPS
   const PixelBuffer pb = init_pixel_buffer(elev_grid->ncols, elev_grid->nrows);
@@ -862,8 +831,8 @@ int main(int argc, char** argv) {
   Grid* hillshade_grid = grid_init_from(elev_grid);
   generate_hillshade(elev_grid, hillshade_grid);
   grid_to_pixelbuffer(hillshade_grid, pb);
-  printf("writing map.hillshade.bmp\n");
-  save_pixel_buffer_to_file(&pb, "map.hillshade.bmp");
+  printf("writing out/map.hillshade.bmp\n");
+  save_pixel_buffer_to_file(&pb, "out/map.hillshade.bmp");
   grid_free(hillshade_grid);
 
   // viewshed bitmap in pb2
@@ -871,8 +840,8 @@ int main(int argc, char** argv) {
 
   // viewshed overlayed on hillshade
   pixelbuffer_overlay(pb, pb2, .5);
-  printf("writing map.viewshed-over-hillshade.bmp\n");
-  save_pixel_buffer_to_file(&pb, "map.viewshed-over-hillshade.bmp");
+  printf("writing out/map.viewshed-over-hillshade.bmp\n");
+  save_pixel_buffer_to_file(&pb, "out/map.viewshed-over-hillshade.bmp");
   printf("done\n");
   fflush(stdout);
 

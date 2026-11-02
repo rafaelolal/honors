@@ -35,10 +35,8 @@ using namespace std;
    Return 1 unconditionally to start, look at the output, then tighten it.
 --------------------------------------------------------------------------- */
 
-// constexpr is const and known at compile time??
-// 50 meters
-constexpr int SCALE = 50;
 constexpr float PI = 3.141592653589793;
+int global_count = 0;
 
 struct Point {
   int y;
@@ -48,14 +46,14 @@ struct Point {
 Point viewpoint{3, 3};
 
 // Parameters aren't of type Point to keep functions generalizable
-float distance(float first_y, float first_x, float second_y, float second_x) {
-  // AI recommended this function
-  // ??
+__device__ __host__ float distance(float first_y, float first_x, float second_y,
+                                   float second_x) {
   return hypot(second_y - first_y, second_x - first_x);
 }
 
-float altitude(float viewpoint_y, float viewpoint_x, float viewpoint_height,
-               float target_y, float target_x, float target_height) {
+__device__ __host__ float altitude(float viewpoint_y, float viewpoint_x,
+                                   float viewpoint_height, float target_y,
+                                   float target_x, float target_height) {
 
   float d = distance(viewpoint_y, viewpoint_x, target_y, target_x);
   // This has to be here because if the distance is zero (viewpoint ~ target),
@@ -82,8 +80,8 @@ float altitude(float viewpoint_y, float viewpoint_x, float viewpoint_height,
 // interpolate either direction. Not sure if there is a more elegant way to do
 // it. Value is the y or x depending on interpolate_y coordinate is the other
 // value in the pair that is exactly known
-float interpolate(int interpolate_y, float value, int coordinate,
-                  const Grid* dem) {
+__device__ __host__ float interpolate(int interpolate_y, float value,
+                                      int coordinate, const Grid* dem) {
   assert(interpolate_y == 0 || interpolate_y == 1);
   assert(dem);
   assert(coordinate >= 0);
@@ -130,15 +128,21 @@ float interpolate(int interpolate_y, float value, int coordinate,
   return ans;
 }
 
-int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
-                     float vh) {
+__global__ void is_point_visible(const Grid* elev_grid, Grid* vis_grid, int vr,
+                                 int vc, float vh) {
+
+  int r = blockIdx.y * blockDim.y + threadIdx.y;
+  int c = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (grid_is_nodata(elev_grid, r, c)) {
-    return elev_grid->nodata_value;
+    grid_set(vis_grid, r, c, elev_grid->nodata_value);
+    return;
   }
 
   if (vr == r && vc == c) {
-    return 1;
+    grid_set(vis_grid, r, c, VISIBLE);
+    atomicAdd(&global_count, 1);
+    return;
   }
 
   float vz = grid_get(elev_grid, vr, vc) + vh;
@@ -178,7 +182,8 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
     float y_calc = vr + static_cast<float>(x - vc) * slope;
     float height = interpolate(1, y_calc, x, elev_grid);
     if (height == elev_grid->nodata_value) {
-      return elev_grid->nodata_value;
+      grid_set(vis_grid, r, c, elev_grid->nodata_value);
+      return;
     }
 
     float z = altitude(vr, vc, vz, y_calc, x, height);
@@ -191,7 +196,8 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
     }
 
     if (z > los_altitude) {
-      return NOT_VISIBLE;
+      grid_set(vis_grid, r, c, NOT_VISIBLE);
+      return;
     }
   }
 
@@ -208,7 +214,8 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
     float x_calc = vc + static_cast<float>(y - vr) / slope;
     float height = interpolate(0, x_calc, y, elev_grid);
     if (height == elev_grid->nodata_value) {
-      return elev_grid->nodata_value;
+      grid_set(vis_grid, r, c, elev_grid->nodata_value);
+      return;
     }
 
     float z = altitude(vr, vc, vz, y, x_calc, height);
@@ -221,11 +228,14 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
     }
 
     if (z > los_altitude) {
-      return NOT_VISIBLE;
+      grid_set(vis_grid, r, c, NOT_VISIBLE);
+      return;
     }
   }
 
-  return VISIBLE;
+  grid_set(vis_grid, r, c, VISIBLE);
+  atomicAdd(&global_count, 1);
+  return;
 }
 
 int compute_viewshed_grid(const Grid* elev_grid, Grid* vis_grid, int vr, int vc,
@@ -237,17 +247,10 @@ int compute_viewshed_grid(const Grid* elev_grid, Grid* vis_grid, int vr, int vc,
   assert(!grid_is_nodata(elev_grid, vr, vc));
   assert(vh >= 0);
 
-  int r, c, count = 0;
+  int r, c = 0;
   for (r = 0; r < elev_grid->nrows; r++) {
     for (c = 0; c < elev_grid->ncols; c++) {
-      if (grid_is_nodata(elev_grid, r, c)) {
-        grid_set(vis_grid, r, c, elev_grid->nodata_value);
-        continue;
-      }
-
-      int is_visible = is_point_visible(elev_grid, r, c, vr, vc, vh);
-      count += is_visible;
-      grid_set(vis_grid, r, c, is_visible);
+      is_point_visible(elev_grid, vis_grid, vr, vc, vh);
 
       // if (grid_get_nodata(elev_grid, r, c)) {
       //   grid_set(vis_grid, r, c, NOT_VISIBLE);
@@ -259,5 +262,6 @@ int compute_viewshed_grid(const Grid* elev_grid, Grid* vis_grid, int vr, int vc,
       // }
     }
   }
-  return count;
+
+  return global_count;
 }

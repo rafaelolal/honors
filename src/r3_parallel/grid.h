@@ -14,6 +14,7 @@ typedef struct _grid {
   unsigned int ncols;
   unsigned int nrows;
   float* data;
+  float* data_d;
 
   float xllcorner;
   float yllcorner;
@@ -44,13 +45,14 @@ static inline float grid_get(const Grid* grid, int r, int c) {
   return grid->data[r * grid->ncols + c];
 }
 
-static inline bool grid_is_nodata(const Grid* grid, int r, int c) {
+__device__ __host__ static inline bool grid_is_nodata(const Grid* grid, int r,
+                                                      int c) {
 
   assert(inside_grid(grid, r, c));
   return grid->nodata_value == grid_get(grid, r, c);
 }
 
-static inline void grid_set(Grid* grid, int r, int c, const float val) {
+__device__ __host__ static inline void grid_set(Grid* grid, int r, int c, const float val) {
   assert(inside_grid(grid, r, c));
   grid->data[r * grid->ncols + c] = val;
   if (val != grid->nodata_value) {
