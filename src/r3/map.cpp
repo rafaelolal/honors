@@ -47,7 +47,6 @@ else return (c + 2f + i - a - 2d -g)/(8*cell)
  */
 float dzdx(const Grid* grid, int r, int c) {
 
-  assert(inside_grid(grid, r, c));
   if (grid_is_nodata(grid, r, c))
     return grid->nodata_value;
 
@@ -103,7 +102,6 @@ azimuth as 135 instead of 315
  */
 float dzdy(const Grid* grid, int r, int c) {
 
-  assert(inside_grid(grid, r, c));
   if (grid_is_nodata(grid, r, c))
     return grid->nodata_value;
 
@@ -181,7 +179,6 @@ float aspect_rad(const Grid* grid, float dzdx, float dzdy) {
 ////////////////////////////////////////////////////////////
 void generate_hillshade(const Grid* grid, Grid* hillshade_grid) {
 
-  assert(grid && hillshade_grid);
   // for hillshading
   // sun zenith in radians relative to vertical
   float sun_zenith_rad = (90 - SUN_zenith_deg) * PI / 180;
@@ -317,9 +314,11 @@ void grid_to_pixelbuffer(const Grid* grid, PixelBuffer pb) {
 // alpha=1, show pb1; when alpha=0, show pb2. write the output in pb1
 void pixelbuffer_overlay(PixelBuffer pb1, PixelBuffer pb2, float alpha) {
 
+  // outside this range, the blended colors overflow into wrong values
   assert(alpha >= 0 && alpha <= 1);
 
-  // shoudl also assert that they have same size
+  // both buffers are read with pb1's loop bounds, so a smaller pb2 reads past
+  // its end
   assert(pb1.height == pb2.height && pb1.width == pb2.width);
 
   for (u16 y = 0; y < pb1.height; y++) {

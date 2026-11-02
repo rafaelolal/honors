@@ -24,7 +24,6 @@ void grid_print_stats(const Grid* g, char* name) {
 Grid* grid_init() {
   Grid* grid;
   grid = (Grid*)malloc(sizeof(Grid));
-  assert(grid);
   grid->data = NULL;
   grid->min_value = (float)INT_MAX;
   grid->max_value = (float)-INT_MAX;
@@ -35,19 +34,22 @@ Grid* grid_init() {
 // grid must be allocated
 void grid_read_header(FILE* in_file, Grid* grid) {
 
-  assert(grid);
-  assert(fscanf(in_file, "ncols %d\n", &grid->ncols));
-  assert(fscanf(in_file, "nrows %d\n", &grid->nrows));
-  assert(fscanf(in_file, "xllcorner %f\n", &grid->xllcorner));
-  assert(fscanf(in_file, "yllcorner %f\n", &grid->yllcorner));
-  assert(fscanf(in_file, "cellsize %f\n", &grid->cellsize));
-  assert(fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value));
+  if (fscanf(in_file, "ncols %d\n", &grid->ncols) != 1 ||
+      fscanf(in_file, "nrows %d\n", &grid->nrows) != 1 ||
+      fscanf(in_file, "xllcorner %f\n", &grid->xllcorner) != 1 ||
+      fscanf(in_file, "yllcorner %f\n", &grid->yllcorner) != 1 ||
+      fscanf(in_file, "cellsize %f\n", &grid->cellsize) != 1 ||
+      fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value) != 1) {
+    printf("bad grid header\n");
+    exit(1);
+  }
 }
 
 // allocate space for the grid data.
 void grid_malloc_data(Grid* grid) {
   if (!grid->data) {
     grid->data = (float*)malloc(grid->nrows * grid->ncols * sizeof(float));
+    // big grids can run out of memory, which would crash later on first access
     assert(grid->data);
   }
 }
@@ -56,7 +58,10 @@ void grid_read_data(FILE* in_file, Grid* grid) {
   float val;
   for (int r = 0; r < grid->nrows; r++) {
     for (int c = 0; c < grid->ncols; c++) {
-      assert(fscanf(in_file, "%f ", &val));
+      if (fscanf(in_file, "%f ", &val) != 1) {
+        printf("bad grid data at (%d, %d)\n", r, c);
+        exit(1);
+      }
       // TODO: before, I was doing val / grid->cellsize, but that was messing up
       // the hillshade and I removed it and the code still works :/
       grid_set(grid, r, c, val);
@@ -120,7 +125,6 @@ void grid_write_to_file(char* filename, Grid* grid) {
 }
 
 void grid_copy_header(Grid* grid, Grid* new_grid) {
-  assert(grid && new_grid);
   new_grid->ncols = grid->ncols;
   new_grid->nrows = grid->nrows;
   new_grid->xllcorner = grid->xllcorner;

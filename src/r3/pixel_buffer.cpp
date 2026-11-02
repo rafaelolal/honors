@@ -24,6 +24,7 @@ SOFTWARE.
 */
 #include "pixel_buffer.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,8 +41,10 @@ SOFTWARE.
 #pragma clang diagnostic pop
 
 PixelBuffer init_pixel_buffer(const u16 width, const u16 height) {
-  return (PixelBuffer){(u32*)malloc(width * height * sizeof(u32)), width,
-                       height};
+  u32* pixels = (u32*)malloc(width * height * sizeof(u32));
+  // big bitmaps can run out of memory, which would crash on the first write
+  assert(pixels);
+  return (PixelBuffer){pixels, width, height};
 }
 
 void deinit_pixel_buffer(const PixelBuffer* const pb) { free(pb->pixels); }
@@ -52,6 +55,9 @@ void write_pixel_to_buffer(const PixelBuffer* const pb, const u16 x,
                            const u16 y, const u8 r, const u8 g, const u8 b) {
 
   const u16 width = pb->width;
+
+  // out of bounds would corrupt memory
+  assert(x < width && y < pb->height);
 
 #ifdef DO_BOUNDS_CHECKING_FOR_PIXEL_WRITES
 

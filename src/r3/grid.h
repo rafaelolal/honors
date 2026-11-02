@@ -40,17 +40,17 @@ static inline int on_boundary_grid(const Grid* grid, int r, int c) {
 }
 
 static inline float grid_get(const Grid* grid, int r, int c) {
+  // out of bounds would read the wrong cell or crash
   assert(inside_grid(grid, r, c));
   return grid->data[r * grid->ncols + c];
 }
 
 static inline bool grid_is_nodata(const Grid* grid, int r, int c) {
-
-  assert(inside_grid(grid, r, c));
   return grid->nodata_value == grid_get(grid, r, c);
 }
 
 static inline void grid_set(Grid* grid, int r, int c, const float val) {
+  // out of bounds would corrupt memory
   assert(inside_grid(grid, r, c));
   grid->data[r * grid->ncols + c] = val;
   if (val != grid->nodata_value) {
@@ -63,6 +63,7 @@ static inline void grid_set(Grid* grid, int r, int c, const float val) {
 
 // set (r,c) to be nodata
 static inline void grid_set_nodata(Grid* grid, int r, int c) {
+  // out of bounds would corrupt memory
   assert(inside_grid(grid, r, c));
   grid->data[r * grid->ncols + c] = grid->nodata_value;
   grid->nb_nodata_values++;
