@@ -1,4 +1,30 @@
+.history
+
+# Ignore extensionless files in src/ (compiled programs). Keep this block first.
+src/**
+!src/**/
+!src/**/*.*
+!src/**/Makefile
+
+# Python and editors
 .venv
-frames
-*.o
+__pycache__/
+~$*
 .DS_Store
+
+# Build output and data
+*.o
+*.asc
+frames
+
+# Experiments
+experiments/bin/
+experiments/bench-*/
+
+# Project outputs
+src/r3/out/
+src/r3_parallel/out/
+src/r3/*.png
+src/collatz/results.txt
+src/collatz/stopping_histogram.txtk
+src/grayscale/*.bin
