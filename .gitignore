@@ -20,6 +20,7 @@ frames
 # Experiments
 experiments/bin/
 experiments/bench-*/
+experiments/logs/
 
 # Project outputs
 src/r3/out/

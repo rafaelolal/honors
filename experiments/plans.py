@@ -2,6 +2,11 @@
 every combination of its lists. Paths are relative to this folder.
 
 schedule is optional and needs schedule(runtime) in the code.
+
+args is optional: extra arguments passed to vis after -e/-r/-c/-h. vis only
+computes by default; ["-v", "vis.asc"] also writes the grid (and fills
+output_sha), and ["-b"] writes the bitmaps. Keep one args per experiment,
+since args isn't part of the key that marks a run as done.
 """
 from pathlib import Path
 
@@ -17,6 +22,9 @@ TIMING_DEMS = [
     "maine-knox-2m", "mtrainier-0.6m",
 ]
 
+# bin/serial predates the compute-only default and requires -v
+OLD_BINARY_ARGS = ["-v", "vis.asc"]
+
 
 def picked_viewpoints(name):
     """The valid points run_serial_timing.sh picked; none until it reaches this DEM."""
@@ -27,19 +35,26 @@ def picked_viewpoints(name):
 
 
 PLANS = {
-    "serial-timing": [
+    "serial-timing-2": [
         dict(code=["bin/serial"], dem=[f"../research/DEM/{name}.asc"],
-             viewpoint=picked_viewpoints(name), height=[0], threads=[1])
+             viewpoint=picked_viewpoints(name), height=[0], threads=[1],
+             args=OLD_BINARY_ARGS)
         for name in TIMING_DEMS
     ],
     "serial-baseline": [
         dict(code=["bin/serial"], dem=[SET1], viewpoint=[(250, 250)],
-             height=[10], threads=[1]),
+             height=[10], threads=[1], args=OLD_BINARY_ARGS),
         dict(code=["bin/serial"], dem=[SIERRA], viewpoint=[(1500, 1500)],
-             height=[10], threads=[1]),
+             height=[10], threads=[1], args=OLD_BINARY_ARGS),
     ],
 }
 
+
+# args example: save the grid and bitmaps for one run, to look at or diff
+    # "set1-outputs": [
+    #     dict(code=["bin/serial-COMMIT"], dem=[SET1], viewpoint=[(250, 250)],
+    #          height=[0, 10], threads=[1], args=["-v", "vis.asc", "-b"]),
+    # ],
 
 # Open MP example:
     # "omp-scaling": [
