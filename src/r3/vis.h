@@ -2,9 +2,7 @@
 #define __vis_h
 
 #include "grid.h"
-
-#define VISIBLE 1
-#define NOT_VISIBLE 0
+#include "visgrid.h"
 
 // debug output level (0=off, 1=verbose); defined in vismain.cpp, set with -d
 extern int DEBUG_LEVEL;
@@ -13,13 +11,14 @@ extern int DEBUG_LEVEL;
    r, c:      the point being tested
    vr, vc:    viewpoint row and column
    vh:        viewpoint height ABOVE the terrain at (vr,vc)
-   returns VISIBLE if (r,c) is visible from the viewpoint, NOT_VISIBLE otherwise
+   returns VISIBLE if (r,c) is visible from the viewpoint, NOT_VISIBLE if not,
+   and VIS_NODATA if it or its line of sight has no data
  */
-int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
-                     float vh);
+uint8_t is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
+                         float vh);
 
-// compute viewshed of (r,c,h) and populate  vis_grid with values
-int compute_viewshed_grid(const Grid* elev_grid, Grid* vis_grid, int vr, int vc,
-                          float vh);
+// compute viewshed of (r,c,h) and populate vis_grid, returns viewshed size
+long compute_viewshed_grid(const Grid* elev_grid, VisGrid* vis_grid, int vr,
+                           int vc, float vh);
 
 #endif

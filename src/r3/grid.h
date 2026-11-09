@@ -4,11 +4,8 @@
 #define __grid_h
 
 #include <assert.h>
-#include <float.h>
 #include <math.h>
-#include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 typedef struct _grid {
   unsigned int ncols;

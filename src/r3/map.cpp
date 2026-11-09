@@ -1,14 +1,13 @@
 // Laura Toma
 //
 #include "map.h"
+#include "bmp.h"
 #include "grid.h"
 #include "pixel_buffer.h"
+#include <vector>
 
-#include <math.h>
+#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
 
 // used to compare float values
 #define EPSILON .001
@@ -27,9 +26,10 @@ Color VIEWPOINT_COLOR = {1, .2, .3};
 
 static const u8 max_rgb_value = 0xffu;
 
-float dist(u16 x1, u16 y1, u16 x2, u16 y2) {
-
-  return sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2));
+float dist(int x1, int y1, int x2, int y2) {
+  // 64-bit: on big grids like Knox, the sum of squares overflows an int
+  int64_t dx = (int64_t)x1 - x2, dy = (int64_t)y1 - y2;
+  return sqrt((double)(dx * dx + dy * dy));
 }
 
 ////////////////////////////////////////////////////////////
@@ -177,72 +177,118 @@ float aspect_rad(const Grid* grid, float dzdx, float dzdy) {
 }
 
 ////////////////////////////////////////////////////////////
-void generate_hillshade(const Grid* grid, Grid* hillshade_grid) {
+// sun angles in radians, for hillshading
+static float sun_zenith_rad() { return (90 - SUN_zenith_deg) * PI / 180; }
 
-  // for hillshading
-  // sun zenith in radians relative to vertical
-  float sun_zenith_rad = (90 - SUN_zenith_deg) * PI / 180;
-
-  // sun azimuth in radians; change the azimuth angle from its
-  // geographic unit (compass direction) to a mathematic unit (right
-  // angle). The direction of the illumination source, azimuth, is
-  // specified in degrees. The hillshade formula requires this angle to
-  // be in units of radians. First, change the azimuth angle from its
-  // geographic unit (compass direction) to a mathematic unit (right
-  // angle). Next, convert the azimuth angle to radians.
+// the hillshade formula wants the azimuth as a math angle, not a compass one
+static float sun_azimuth_rad() {
   float sun_azimuth_math = 360 - SUN_azimuth_deg + 90;
   if (sun_azimuth_math > 360)
     sun_azimuth_math -= 360;
-  float sun_azimuth_rad = sun_azimuth_math * PI / 180;
+  return sun_azimuth_math * PI / 180;
+}
 
-  printf("sun zenith rad = %.1f\n", sun_zenith_rad);
-  printf("sun azimuth rad = %.1f\n", sun_azimuth_rad);
+////////////////////////////////////////////////////////////
+// hillshade of one cell in [0, 255], or the grid's nodata value
+float hillshade_at(const Grid* grid, int r, int c) {
+  static const float zenith = sun_zenith_rad();
+  static const float azimuth = sun_azimuth_rad();
 
-  for (int i = 0; i < grid->nrows; i++) {
-    for (int j = 0; j < grid->ncols; j++) {
+  float dx = dzdx(grid, r, c);
+  float dy = dzdy(grid, r, c);
+  float terrain_slope_rad = slope_rad(grid, dx, dy);
+  float terrain_aspect_rad = aspect_rad(grid, dx, dy);
+  if ((terrain_slope_rad == grid->nodata_value) ||
+      (terrain_aspect_rad == grid->nodata_value))
+    return grid->nodata_value;
 
-      float dx = dzdx(grid, i, j);
-      float dy = dzdy(grid, i, j);
-      float terrain_slope_rad = slope_rad(grid, dx, dy);
-      float terrain_aspect_rad = aspect_rad(grid, dx, dy);
-      float hillshade;
-      if ((terrain_slope_rad == grid->nodata_value) ||
-          (terrain_aspect_rad == grid->nodata_value)) {
-        hillshade = grid->nodata_value;
-      } else {
-        if (terrain_aspect_rad == FLAT_ASPECT)
-          // terrain_aspect_rad = sun_azimuth_rad;
-          // flat ==> cos (0) = 1, so no shading
-          // this does not seem to make a difference
-          terrain_aspect_rad = 0;
+  // flat ==> cos (0) = 1, so no shading
+  if (terrain_aspect_rad == FLAT_ASPECT)
+    terrain_aspect_rad = 0;
 
-        // hillshade value at (i,j)
-        hillshade = cos(sun_zenith_rad) * cos(terrain_slope_rad) +
-                    sin(sun_zenith_rad) * sin(terrain_slope_rad) *
-                        cos(sun_azimuth_rad - terrain_aspect_rad);
+  float hillshade =
+      cos(zenith) * cos(terrain_slope_rad) +
+      sin(zenith) * sin(terrain_slope_rad) * cos(azimuth - terrain_aspect_rad);
+  // should not be negative
+  if (hillshade < 0)
+    hillshade = 0;
 
-        // can this be bigger than 1?  no
-        // if (hillshade > 255) assert(0);
-        // printf("shade =%.1f ", hillshade);
-        // can this be negative?  should not
-        if (hillshade < 0)
-          hillshade = 0;
+  return hillshade * 255.0;
+}
 
-        hillshade *= 255.0;
-      }
-      grid_set(hillshade_grid, i, j, hillshade);
-    }
-  }
+////////////////////////////////////////////////////////////
+void generate_hillshade(const Grid* grid, Grid* hillshade_grid) {
+  printf("sun zenith rad = %.1f\n", sun_zenith_rad());
+  printf("sun azimuth rad = %.1f\n", sun_azimuth_rad());
+
+  for (int i = 0; i < grid->nrows; i++)
+    for (int j = 0; j < grid->ncols; j++)
+      grid_set(hillshade_grid, i, j, hillshade_at(grid, i, j));
+
   printf("some stats:\n");
   printf("\thillshaderange: [%.1f, %.1f]\n", hillshade_grid->min_value,
          hillshade_grid->max_value);
+}
+
+////////////////////////////////////////////////////////////
+// color in [0,1] to a byte, truncating like the old pixel buffer code
+static u8 to_byte(float v) { return (u8)(u16)(v * max_rgb_value); }
+
+void write_bitmaps(const Grid* elev, const VisGrid* vis, int vr, int vc,
+                   float alpha, const char* hillshade_path,
+                   const char* viewshed_path, const char* overlay_path) {
+  // outside this range, the blended colors overflow into wrong values
+  assert(alpha >= 0 && alpha <= 1);
+  // the viewshed is computed on the elevation grid, so they line up
+  assert(vis->nrows == elev->nrows && vis->ncols == elev->ncols);
+
+  const int w = elev->ncols, h = elev->nrows;
+  float rad = (float)VIEWPOINT_RADIUS * (float)h;
+
+  BmpWriter hb, vb, ob;
+  bmp_open(&hb, hillshade_path, w, h);
+  bmp_open(&vb, viewshed_path, w, h);
+  bmp_open(&ob, overlay_path, w, h);
+  std::vector<u8> hrow(3 * (size_t)w), vrow(3 * (size_t)w), orow(3 * (size_t)w);
+
+  // BMP stores rows bottom-up
+  for (int r = h - 1; r >= 0; r--) {
+    for (int c = 0; c < w; c++) {
+      u8* hp = &hrow[3 * (size_t)c];
+      u8* vp = &vrow[3 * (size_t)c];
+      u8* op = &orow[3 * (size_t)c];
+
+      float shade = hillshade_at(elev, r, c);
+      for (int i = 0; i < 3; i++)
+        hp[i] = shade == elev->nodata_value ? to_byte(NODATA_COLOR[i])
+                                            : (u8)(u16)shade;
+
+      uint8_t v = visgrid_get(vis, r, c);
+      const float* color = (v & VIS_NODATA)           ? NODATA_COLOR
+                           : dist(vr, vc, r, c) < rad ? VIEWPOINT_COLOR
+                           : v == VISIBLE             ? VIS_COLOR
+                                                      : INVIS_COLOR;
+      for (int i = 0; i < 3; i++)
+        vp[i] = to_byte(color[i]);
+
+      // alpha=1 shows the hillshade, alpha=0 the viewshed
+      for (int i = 0; i < 3; i++)
+        op[i] = vp[i] + (int)(alpha * (float)(hp[i] - vp[i]));
+    }
+    bmp_write_row(&hb, hrow.data());
+    bmp_write_row(&vb, vrow.data());
+    bmp_write_row(&ob, orow.data());
+  }
+  bmp_close(&hb);
+  bmp_close(&vb);
+  bmp_close(&ob);
 }
 
 ///////////////////////////////////////////////////////////
 // flow_grid: grid of flow accumulation  values
 // nintervals: number of height and color intervals
 // color gradient of blue. height intervals are not equal but logarithmic
-void grid_vis_to_pixelbuffer(const Grid* vis_grid, int vr, int vc,
+void grid_vis_to_pixelbuffer(const VisGrid* vis_grid, int vr, int vc,
                              PixelBuffer pb) {
 
   float rad = (float)VIEWPOINT_RADIUS * (float)vis_grid->nrows;
@@ -253,15 +299,15 @@ void grid_vis_to_pixelbuffer(const Grid* vis_grid, int vr, int vc,
   for (u16 y = 0; y < pb.height; y++) {
     for (u16 x = 0; x < pb.width; x++) {
 
-      if (grid_is_nodata(vis_grid, y, x)) {
+      uint8_t vis = visgrid_get(vis_grid, y, x);
+      if (vis & VIS_NODATA) {
         for (int i = 0; i < 3; i++)
           color[i] = NODATA_COLOR[i];
       } else if (dist((u16)vr, (u16)vc, (u16)y, (u16)x) < rad) {
         for (int i = 0; i < 3; i++)
           color[i] = VIEWPOINT_COLOR[i];
       } else {
-        float vis = grid_get(vis_grid, y, x); // value of this pixel
-        if (vis == 1) {
+        if (vis == VISIBLE) {
           // visible
           for (int i = 0; i < 3; i++)
             color[i] = VIS_COLOR[i];

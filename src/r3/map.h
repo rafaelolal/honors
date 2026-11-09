@@ -4,14 +4,8 @@
 #define __map_h
 
 #include "grid.h"
+#include "visgrid.h"
 #include "pixel_buffer.h"
-
-#include <assert.h>
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
 
 #define PI 3.1415
 #define FLAT_ASPECT 0
@@ -20,8 +14,8 @@
 typedef float Color[3];
 
 ////////////////////////////////////////////////////////////
-// returns the distance between (x,y) and (a,b) truncated to u16
-float dist(u16 x, u16 y, u16 a, u16 b);
+// returns the distance between (x,y) and (a,b)
+float dist(int x, int y, int a, int b);
 
 ////////////////////////////////////////////////////////////
 /*
@@ -53,6 +47,9 @@ float aspect_rad(const Grid* grid, float dzdx, float dzdy);
 
 // populate with values hillshade_grid
 void generate_hillshade(const Grid* grid, Grid* hillshade_grid);
+
+// hillshade of one cell in [0, 255], or the grid's nodata value
+float hillshade_at(const Grid* grid, int r, int c);
 
 // populate with values slope_grid
 void generate_slope(const Grid* grid, Grid* slope_grid);
@@ -88,12 +85,20 @@ void grid_gradientcolorintervals_to_pixelbuffer(const Grid* grid,
 void grid_to_pixelbuffer(const Grid* grid, PixelBuffer pb);
 
 // viewshed bitmap
-void grid_vis_to_pixelbuffer(const Grid* vis_grid, int vr, int vc,
+void grid_vis_to_pixelbuffer(const VisGrid* vis_grid, int vr, int vc,
                              PixelBuffer pb);
 
 ////////////////////////////////////////////////////////////
 // overlay pb2 on top of pb1, with given transparency alpha. when
 // alpha=1, show pb1; when alpha=0, show pb2. write the output in pb1
 void pixelbuffer_overlay(PixelBuffer pb1, PixelBuffer pb2, float alpha);
+
+////////////////////////////////////////////////////////////
+// Writes the hillshade, viewshed and viewshed-over-hillshade bitmaps at full
+// resolution in one pass, computing each pixel as its row is written, so no
+// image is held in memory. alpha=1 shows the hillshade, alpha=0 the viewshed.
+void write_bitmaps(const Grid* elev, const VisGrid* vis, int vr, int vc,
+                   float alpha, const char* hillshade_path,
+                   const char* viewshed_path, const char* overlay_path);
 
 #endif

@@ -1,9 +1,6 @@
 #include "vis.h"
 #include "grid.h"
 #include <cassert>
-#include <iostream>
-#include <math.h>
-#include <stdio.h>
 
 using namespace std;
 
@@ -35,24 +32,14 @@ using namespace std;
    Return 1 unconditionally to start, look at the output, then tighten it.
 --------------------------------------------------------------------------- */
 
-constexpr float PI = 3.141592653589793;
-
-struct Point {
-  int y;
-  int x;
-};
-
-Point viewpoint{3, 3};
-
-// Parameters aren't of type Point to keep functions generalizable
 float distance(float first_y, float first_x, float second_y, float second_x) {
-  // AI recommended this function
-  // ??
-  return hypot(second_y - first_y, second_x - first_x);
+  float dy = second_y - first_y;
+  float dx = second_x - first_x;
+  return sqrt(dy * dy + dx * dx);
 }
 
-float altitude(float viewpoint_y, float viewpoint_x, float viewpoint_height,
-               float target_y, float target_x, float target_height) {
+float slope(float viewpoint_y, float viewpoint_x, float viewpoint_height,
+            float target_y, float target_x, float target_height) {
 
   float d = distance(viewpoint_y, viewpoint_x, target_y, target_x);
   // This has to be here because if the distance is zero (viewpoint ~ target),
@@ -61,163 +48,53 @@ float altitude(float viewpoint_y, float viewpoint_x, float viewpoint_height,
     return 0;
   }
 
-  // TOA
-  // tan(z) = opposite / adjacent
-  // z = atan(opposite / adjacent)
-  float height_difference = target_height - viewpoint_height;
-  float z = atan(height_difference / d);
-  if (DEBUG_LEVEL == 1) {
-    cout << "Calculated altitude from (" << viewpoint_y << ", " << viewpoint_x
-         << ") to (" << target_y << ", " << target_x << "): distance: " << d
-         << " height difference: " << (height_difference) << " altitude: " << z
-         << " radians" << endl;
-  }
-  return z;
+  return (target_height - viewpoint_height) / d;
 }
 
-// This method looks more confusing than it has to be because I made it
-// interpolate either direction. Not sure if there is a more elegant way to do
-// it. Value is the y or x depending on interpolate_y coordinate is the other
-// value in the pair that is exactly known
+// Interpolates between two neighboring cells. value is the fractional position
+// along the interpolated axis; coordinate is the exact position on the other.
 float interpolate(int interpolate_y, float value, int coordinate,
                   const Grid* dem) {
+  // any other value would step diagonally or skip a cell below
   assert(interpolate_y == 0 || interpolate_y == 1);
-  assert(dem);
-  assert(coordinate >= 0);
-  int horizontal_size = interpolate_y == 0 ? dem->nrows : dem->ncols;
-  assert(coordinate < horizontal_size);
-
+  // a negative value truncates toward 0, silently giving the wrong cell
   assert(value >= 0);
-  int v_below = static_cast<int>(value);
-  int v_above = v_below + 1;
-  assert(v_below >= 0);
-  assert(v_above >= 0);
-  int vertical_size = interpolate_y == 1 ? dem->nrows : dem->ncols;
-  assert(v_below < vertical_size);
-  assert(v_above < vertical_size);
+  int below = static_cast<int>(value);
+  float t = value - below;
 
-  float t = value - v_below;
-  assert(t >= 0 && t <= 1);
-  int y_below, y_above, x_below, x_above;
-  if (interpolate_y == 1) {
-    y_below = v_below;
-    y_above = v_above;
-    x_below = coordinate;
-    x_above = coordinate;
-  } else {
-    y_below = coordinate;
-    y_above = coordinate;
-    x_below = v_below;
-    x_above = v_above;
-  }
+  int r = interpolate_y ? below : coordinate;
+  int c = interpolate_y ? coordinate : below;
+  float h1 = grid_get(dem, r, c);
+  // The next cell along the interpolated axis. ! flips 0 and 1, so exactly one
+  // of r and c moves by 1: r if interpolate_y is 1, c if it's 0.
+  float h2 = grid_get(dem, r + interpolate_y, c + !interpolate_y);
 
-  if (grid_is_nodata(dem, y_below, x_below) ||
-      grid_is_nodata(dem, y_above, x_above)) {
+  if (h1 == dem->nodata_value || h2 == dem->nodata_value) {
     return dem->nodata_value;
   }
 
-  float ans = grid_get(dem, y_below, x_below) * (1.0 - t) +
-              grid_get(dem, y_above, x_above) * t;
-  if (DEBUG_LEVEL == 1) {
-    cout << "Interpolated between points (" << y_below << ", " << x_below
-         << ", " << grid_get(dem, y_below, x_below) << ") and (" << y_above
-         << ", " << x_above << ", " << grid_get(dem, y_above, x_above)
-         << ") with t: " << t << " to get ans: " << ans << endl;
-  }
-  return ans;
+  // 1.0f avoids unnecessary conversion to double
+  return h1 * (1.0f - t) + h2 * t;
 }
 
-int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
-                     float vh) {
-
-  if (grid_is_nodata(elev_grid, r, c)) {
-    return elev_grid->nodata_value;
-  }
-
-  if (vr == r && vc == c) {
-    return 1;
-  }
-
-  float vz = grid_get(elev_grid, vr, vc) + vh;
-  float pz = grid_get(elev_grid, r, c);
-
-  // altitude from viewpoint to target
-  // phi in math convention
-  float los_altitude = altitude(vr, vc, vz, r, c, pz);
-  // 90 degrees
-  assert(los_altitude >= -PI / 2 && los_altitude <= PI / 2);
-
-  // horizontal angle from viewpoint to target
-  float dy = r - vr;
-  float dx = c - vc;
-  float slope = dy / dx;
-
-  if (DEBUG_LEVEL == 1) {
-    cout << "viewpoint: (" << vr << ", " << vc << ") target: (" << r << ", "
-         << c << ") slope: " << slope << " los_altitude: " << los_altitude
-         << endl;
-  }
-
-  // Vertical intersections
-  int dir_x = dx > 0 ? 1 : -1;
-  // Start one away in the direction of target, and move towards it
-  if (DEBUG_LEVEL == 1) {
-    cout << "y_calcs" << endl;
-  }
-  for (int x = vc; x != c; x += dir_x) {
-    // Skip first iteration, could literally just do
-    // x = vc + dir_x, but that leads to bugs when x overshoots c since I am
-    // checking x != c instead of x < c or x > c
-    if (x == vc) {
-      continue;
-    }
-    // y is ray vertical intersection point y-value
-    float y_calc = vr + static_cast<float>(x - vc) * slope;
-    float height = interpolate(1, y_calc, x, elev_grid);
+// Checks where the ray crosses one family of grid lines. "line" is the axis we
+// step along and "other" is the axis we solve for. Returns VISIBLE if the ray
+// gets through, otherwise NOT_VISIBLE or VIS_NODATA.
+static uint8_t check_crossings(const Grid* elev_grid, int interpolate_y,
+                               int start, int end, int other_start,
+                               float other_step, float vz, float los_slope) {
+  int dir = end > start ? 1 : -1;
+  int steps = abs(end - start);
+  for (int k = 1; k < steps; k++) {
+    int line = start + k * dir;
+    float other = other_start + static_cast<float>(line - start) * other_step;
+    float height = interpolate(interpolate_y, other, line, elev_grid);
     if (height == elev_grid->nodata_value) {
-      return elev_grid->nodata_value;
+      return VIS_NODATA;
     }
 
-    float z = altitude(vr, vc, vz, y_calc, x, height);
-    // 90 degrees
-    assert(z >= -PI / 2 && z <= PI / 2);
-
-    if (DEBUG_LEVEL == 1) {
-      cout << "altitude between viewpoint and vertical intersection: " << z
-           << " los_altitude: " << los_altitude << endl;
-    }
-
-    if (z > los_altitude) {
-      return NOT_VISIBLE;
-    }
-  }
-
-  int dir_y = r - vr > 0 ? 1 : -1;
-  // Horizontal intersections
-  if (DEBUG_LEVEL == 1) {
-    cout << "x_calcs" << endl;
-  }
-  for (int y = vr; y != r; y += dir_y) {
-    if (y == vr) {
-      continue;
-    }
-    // x is ray horizontal intersection point x-value
-    float x_calc = vc + static_cast<float>(y - vr) / slope;
-    float height = interpolate(0, x_calc, y, elev_grid);
-    if (height == elev_grid->nodata_value) {
-      return elev_grid->nodata_value;
-    }
-
-    float z = altitude(vr, vc, vz, y, x_calc, height);
-    // 90 degrees
-    assert(z >= -PI / 2 && z <= PI / 2);
-
-    if (DEBUG_LEVEL == 1) {
-      cout << "altitude between viewpoint and horizontal intersection: " << z
-           << " los_altitude: " << los_altitude << endl;
-    }
-
-    if (z > los_altitude) {
+    float s = slope(start, other_start, vz, line, other, height);
+    if (s > los_slope) {
       return NOT_VISIBLE;
     }
   }
@@ -225,36 +102,54 @@ int is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
   return VISIBLE;
 }
 
-int compute_viewshed_grid(const Grid* elev_grid, Grid* vis_grid, int vr, int vc,
-                          float vh) {
+uint8_t is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
+                         float vh) {
 
-  assert(vr >= 0 && vr < elev_grid->nrows);
-  assert(vc >= 0 && vc < elev_grid->ncols);
-  // The viewpoint must be a valid point in the grid, not a nodata value
+  if (grid_is_nodata(elev_grid, r, c)) {
+    return VIS_NODATA;
+  }
+
+  if (vr == r && vc == c) {
+    return VISIBLE;
+  }
+
+  float vz = grid_get(elev_grid, vr, vc) + vh;
+  float pz = grid_get(elev_grid, r, c);
+
+  // slope from viewpoint to target
+  float los_slope = slope(vr, vc, vz, r, c, pz);
+
+  // horizontal angle from viewpoint to target
+  float dy = r - vr;
+  float dx = c - vc;
+
+  // Vertical intersections, then horizontal ones
+  uint8_t result =
+      check_crossings(elev_grid, 1, vc, c, vr, dy / dx, vz, los_slope);
+  if (result == VISIBLE) {
+    result = check_crossings(elev_grid, 0, vr, r, vc, dx / dy, vz, los_slope);
+  }
+  return result;
+}
+
+long compute_viewshed_grid(const Grid* elev_grid, VisGrid* vis_grid, int vr,
+                           int vc, float vh) {
+
+  // a nodata viewpoint has no height
+  // grid_get also checks it's inside the grid
   assert(!grid_is_nodata(elev_grid, vr, vc));
-  assert(vh >= 0);
 
-  int r, c, count = 0;
-  for (r = 0; r < elev_grid->nrows; r++) {
-    for (c = 0; c < elev_grid->ncols; c++) {
-      if (grid_is_nodata(elev_grid, r, c)) {
-        grid_set(vis_grid, r, c, elev_grid->nodata_value);
-        continue;
+  long count = 0;
+  for (int r = 0; r < (int)elev_grid->nrows; r++) {
+    for (int c = 0; c < (int)elev_grid->ncols; c++) {
+      uint8_t v = is_point_visible(elev_grid, r, c, vr, vc, vh);
+      // the grid starts all NOT_VISIBLE, so only other values need writing
+      if (v != NOT_VISIBLE) {
+        visgrid_set(vis_grid, r, c, v);
       }
-
-      int is_visible = is_point_visible(elev_grid, r, c, vr, vc, vh);
-      count += is_visible;
-      grid_set(vis_grid, r, c, is_visible);
-
-      // if (grid_get_nodata(elev_grid, r, c)) {
-      //   grid_set(vis_grid, r, c, NOT_VISIBLE);
-      // } else if (is_point_visible(elev_grid, r, c, vr, vc, vh) == VISIBLE) {
-      //   grid_set(vis_grid, r, c, VISIBLE);
-      //   count++;
-      // } else {
-      //   grid_set(vis_grid, r, c, NOT_VISIBLE);
-      // }
+      count += v == VISIBLE;
     }
   }
+
   return count;
 }
