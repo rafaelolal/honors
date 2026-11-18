@@ -10,8 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-using namespace std;
-
 #include <filesystem>
 #include <string>
 #include <sys/resource.h>
@@ -51,9 +49,6 @@ struct Timer {
   }
 };
 
-// debug output level, set with -d, used by vis.cpp
-int DEBUG_LEVEL = 0;
-
 // Command line options, anything not given keeps these defaults.
 struct Options {
   char* elev_name = NULL; // required
@@ -71,9 +66,9 @@ static const char usage[] =
     "    -c <col>        Viewpoint col (default: center col)\n"
     "    -h <height>     Viewpoint height above ground (default: 0)\n"
     "    -v <vis.asc>    Also write the viewshed grid to out/<vis.asc>\n"
-    "    -b              Also write the hillshade, viewshed and overlay "
-    "bitmaps to out/\n"
-    "    -d <level>      Debug level (0=off, 1=verbose; default: 0)\n";
+    "    -b              Also write out/<vis>.hillshade.bmp, .viewshed.bmp "
+    "and\n"
+    "                    .viewshed-over-hillshade.bmp (needs -v)\n";
 
 static void fail(const char* message, const char* prog) {
   printf("oops..%s\n", message);
@@ -89,7 +84,7 @@ static Options parseArguments(int argc, char* const* argv) {
 
   // int, since a char can't hold getopt's -1 where char is unsigned
   int c;
-  while ((c = getopt(argc, argv, "e:v:br:c:h:d:")) != -1) {
+  while ((c = getopt(argc, argv, "e:v:br:c:h:")) != -1) {
     switch (c) {
     case 'e':
       o.elev_name = optarg;
@@ -109,9 +104,6 @@ static Options parseArguments(int argc, char* const* argv) {
     case 'h':
       o.vh = atof(optarg);
       break;
-    case 'd':
-      DEBUG_LEVEL = atoi(optarg);
-      break;
     default:
       printf(usage, argv[0]);
       exit(2);
@@ -125,10 +117,11 @@ static Options parseArguments(int argc, char* const* argv) {
     fail("unexpected extra arguments", argv[0]);
   if (!o.elev_name)
     fail("an elevation grid is required", argv[0]);
-  if (DEBUG_LEVEL < 0)
-    fail("debug level cannot be <0", argv[0]);
   if (o.vh < 0)
     fail("viewpoint height cannot be <0", argv[0]);
+  // bitmaps are named after the -v grid
+  if (o.bitmaps && !o.vis_name)
+    fail("-b needs -v, which names the bitmaps", argv[0]);
   return o;
 }
 
@@ -142,6 +135,11 @@ int main(int argc, char** argv) {
   printf("reading %s\n", o.elev_name);
   Grid* elev_grid = grid_read_from_file(o.elev_name);
   grid_print_stats(elev_grid, o.elev_name);
+  // "@stat name value" lines are parsed by experiments/bench.py
+  printf("@stat nrows %u\n@stat ncols %u\n@stat min_h %f\n@stat max_h %f\n"
+         "@stat nodata %d\n",
+         elev_grid->nrows, elev_grid->ncols, elev_grid->min_value,
+         elev_grid->max_value, elev_grid->nb_nodata_values);
   T.lap("grid_read_from_file");
 
   // default viewpoint is the center, which needs the grid's size
@@ -156,9 +154,9 @@ int main(int argc, char** argv) {
     fail("viewpoint is on a nodata cell, pick another with -r/-c", argv[0]);
 
   printf("running with arguments:\n\telev_name: %s\n\tvp=(%d, %d, %.1f)\n"
-         "\tvis_name: %s\n\tbitmaps: %d\n\tdebug_level: %d\n",
+         "\tvis_name: %s\n\tbitmaps: %d\n",
          o.elev_name, o.vr, o.vc, o.vh, o.vis_name ? o.vis_name : "(none)",
-         o.bitmaps, DEBUG_LEVEL);
+         o.bitmaps);
   fflush(stdout);
 
   // create the viewshed grid
@@ -169,7 +167,7 @@ int main(int argc, char** argv) {
   long count = compute_viewshed_grid(elev_grid, vis_grid, o.vr, o.vc, o.vh);
   T.lap("compute_viewshed_grid");
 
-  printf("viewshed size=%ld\n", count);
+  printf("viewshed size=%ld\n@stat viewshed_size %ld\n", count, count);
 
   // all outputs go in out/, relative to where vis is run
   if (o.vis_name || o.bitmaps)
@@ -184,13 +182,16 @@ int main(int argc, char** argv) {
   }
 
   if (o.bitmaps) {
+    // out/vis.asc -> out/vis.hillshade.bmp, ...
+    std::string base =
+        "out/" + std::filesystem::path(o.vis_name).stem().string();
+    std::string hs = base + ".hillshade.bmp", vs = base + ".viewshed.bmp",
+                ov = base + ".viewshed-over-hillshade.bmp";
     // full resolution, streamed row by row, so no image is held in memory
-    printf("writing out/map.hillshade.bmp, out/map.viewshed.bmp, "
-           "out/map.viewshed-over-hillshade.bmp\n");
+    printf("writing %s, %s, %s\n", hs.c_str(), vs.c_str(), ov.c_str());
     fflush(stdout);
-    write_bitmaps(elev_grid, vis_grid, o.vr, o.vc, .5, "out/map.hillshade.bmp",
-                  "out/map.viewshed.bmp",
-                  "out/map.viewshed-over-hillshade.bmp");
+    write_bitmaps(elev_grid, vis_grid, o.vr, o.vc, .5, hs.c_str(), vs.c_str(),
+                  ov.c_str());
     T.lap("write_bitmaps");
   }
 
