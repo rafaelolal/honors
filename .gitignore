@@ -29,3 +29,7 @@ src/r3/*.png
 src/collatz/results.txt
 src/collatz/stopping_histogram.txtk
 src/grayscale/*.bin
+
+# Profiling data and diff output
+*.data
+src/visdiff/out/
