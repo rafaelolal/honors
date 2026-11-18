@@ -5,7 +5,6 @@
 
 #include "grid.h"
 #include "visgrid.h"
-#include "pixel_buffer.h"
 
 #define PI 3.1415
 #define FLAT_ASPECT 0
@@ -45,53 +44,8 @@ float slope_rad(const Grid* grid, float dzdx, float dzdy);
 ////////////////////////////////////////////////////////////
 float aspect_rad(const Grid* grid, float dzdx, float dzdy);
 
-// populate with values hillshade_grid
-void generate_hillshade(const Grid* grid, Grid* hillshade_grid);
-
 // hillshade of one cell in [0, 255], or the grid's nodata value
 float hillshade_at(const Grid* grid, int r, int c);
-
-// populate with values slope_grid
-void generate_slope(const Grid* grid, Grid* slope_grid);
-
-// populate with values aspect_grid
-void generate_aspect(const Grid* grid, Grid* aspect_grid);
-
-////////////////////////////////////////////////////////////
-// set the pixel buffer to correpsond to a grayscale image of grid
-void grid_grayscale_to_pixelbuffer(const Grid* grid, PixelBuffer pb);
-
-////////////////////////////////////////////////////////////
-// helper function
-// return the index i of the interval values[i], values[i+1] that contains h
-//  nb_intervals: nb intervals
-// values: an array of nb_intervals + 1 values
-int find_interval(float h, const Grid* grid, float* values, int nb_intervals);
-
-///////////////////////////////////////////////////////////
-// set the pixel buffer to correpsond to color discrete intervals image
-// of grid
-void grid_discretecolorintervals_to_pixelbuffer(const Grid* grid,
-                                                PixelBuffer pb);
-
-////////////////////////////////////////////////////////////
-// set the pixels in the pixel buffer to correpsond to color gradient
-// intervals image of grid
-void grid_gradientcolorintervals_to_pixelbuffer(const Grid* grid,
-                                                PixelBuffer pb);
-
-////////////////////////////////////////////////////////////
-// this grid contains values 0..255, put  those in a pixelbuffer
-void grid_to_pixelbuffer(const Grid* grid, PixelBuffer pb);
-
-// viewshed bitmap
-void grid_vis_to_pixelbuffer(const VisGrid* vis_grid, int vr, int vc,
-                             PixelBuffer pb);
-
-////////////////////////////////////////////////////////////
-// overlay pb2 on top of pb1, with given transparency alpha. when
-// alpha=1, show pb1; when alpha=0, show pb2. write the output in pb1
-void pixelbuffer_overlay(PixelBuffer pb1, PixelBuffer pb2, float alpha);
 
 ////////////////////////////////////////////////////////////
 // Writes the hillshade, viewshed and viewshed-over-hillshade bitmaps at full
