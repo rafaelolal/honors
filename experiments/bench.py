@@ -17,23 +17,32 @@ import csv
 import hashlib
 import itertools
 import os
-import resource
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 from plans import PLANS
 
-REPS = 5
 TIMEOUT = 4 * 3600  # seconds, per run
 OUT = Path("results.csv")
 LOGS = Path("logs")
 
 KEY = ["experiment", "code", "binary_sha", "dem", "vr", "vc", "vh", "threads",
        "schedule", "rep"]
-COLUMNS = ["timestamp", *KEY, "status", "output_sha", "phase", "wall", "user", "sys"]
+# about the DEM and the run, the same on every phase row of a run
+STATS = ["dem_name", "nrows", "ncols", "cells", "min_h", "max_h", "relief", "nodata",
+         "nodata_pct", "viewshed_size", "viewshed_pct", "max_rss_mb"]
+COLUMNS = ["timestamp", *KEY, "status", "output_sha", *STATS,
+           "phase", "wall", "user", "sys"]
+
+# older binaries print no @stat lines, only these
+GRID_LINE = re.compile(r"rows=(\d+),cols=(\d+)\], range=\[(\S+), (\S+)\], "
+                       r"NODATA values=(\d+)")
+VIEWSHED_LINE = re.compile(r"viewshed size=(\d+)")
 
 
 def sha(path):
@@ -41,10 +50,14 @@ def sha(path):
 
 
 def configs(names):
-    # reps are the outer loop, so slow drift overnight doesn't favor one config
-    for rep in range(REPS):
+    # reps are the outer loop, so slow drift overnight doesn't favor one config;
+    # a block drops out once its own reps (default 1) are done
+    max_reps = max(b.get("reps", 1) for name in names for b in PLANS[name])
+    for rep in range(max_reps):
         for name in names:
             for b in PLANS[name]:
+                if rep >= b.get("reps", 1):
+                    continue
                 for code, dem, (vr, vc), vh, threads, schedule in itertools.product(
                     b["code"], b["dem"], b["viewpoint"], b["height"], b["threads"],
                     b.get("schedule", [""]),
@@ -54,6 +67,28 @@ def configs(names):
                                dem=dem, vr=vr, vc=vc, vh=vh, threads=threads,
                                schedule=schedule, rep=rep,
                                args=[str(a) for a in b.get("args", [])])
+
+
+def parse_stats(text, dem):
+    """DEM and viewshed stats from a run's output; missing ones are left empty."""
+    found = dict(l.split()[1:3] for l in text.splitlines() if l.startswith("@stat "))
+    if "nrows" not in found and (m := GRID_LINE.search(text)):
+        found.update(zip(["nrows", "ncols", "min_h", "max_h", "nodata"], m.groups()))
+    if "viewshed_size" not in found and (m := VIEWSHED_LINE.search(text)):
+        found["viewshed_size"] = m.group(1)
+
+    stats = dict.fromkeys(STATS, "")
+    stats.update({k: v for k, v in found.items() if k in stats})
+    stats["dem_name"] = Path(dem).stem
+    if found.get("nrows"):
+        cells = int(found["nrows"]) * int(found["ncols"])
+        data_cells = cells - int(found["nodata"])
+        stats["cells"] = cells
+        stats["relief"] = f"{float(found['max_h']) - float(found['min_h']):.2f}"
+        stats["nodata_pct"] = f"{100 * int(found['nodata']) / cells:.4f}"
+        if found.get("viewshed_size") and data_cells:
+            stats["viewshed_pct"] = f"{100 * int(found['viewshed_size']) / data_cells:.4f}"
+    return stats
 
 
 def log_path(c):
@@ -78,18 +113,28 @@ def run(c, log):
     # outputs are big, so each run gets a directory that is deleted afterwards;
     # it's on the same disk as the project so write times stay realistic
     with tempfile.TemporaryDirectory(dir=".", prefix="bench-") as tmp, log.open("w") as f:
-        before = resource.getrusage(resource.RUSAGE_CHILDREN)
         start = time.monotonic()
-        try:
-            p = subprocess.run(cmd, cwd=tmp, env=env, stdout=f, stderr=subprocess.STDOUT,
-                               timeout=TIMEOUT)
-            status = f"exit {p.returncode}" if p.returncode else "ok"
-        except subprocess.TimeoutExpired:
-            status = "timeout"
+        p = subprocess.Popen(cmd, cwd=tmp, env=env, stdout=f, stderr=subprocess.STDOUT)
+        timed_out = threading.Event()
+
+        def kill():
+            timed_out.set()
+            p.kill()
+
+        timer = threading.Timer(TIMEOUT, kill)
+        timer.start()
+        # wait4 gives this run's own usage, including its peak memory;
+        # taskset execs vis, so the pid is vis itself
+        _, wait_status, usage = os.wait4(p.pid, 0)
+        timer.cancel()
         wall = time.monotonic() - start
-        after = resource.getrusage(resource.RUSAGE_CHILDREN)
-        time_cmd = ["time_cmd", f"{wall:.6f}", f"{after.ru_utime - before.ru_utime:.6f}",
-                    f"{after.ru_stime - before.ru_stime:.6f}"]
+        p.returncode = os.waitstatus_to_exitcode(wait_status)
+        if timed_out.is_set():
+            status = "timeout"
+        else:
+            status = f"exit {p.returncode}" if p.returncode else "ok"
+        time_cmd = ["time_cmd", f"{wall:.6f}", f"{usage.ru_utime:.6f}",
+                    f"{usage.ru_stime:.6f}"]
 
         output_sha = ""
         if status == "ok" and out_name:
@@ -99,11 +144,13 @@ def run(c, log):
             else:
                 status = "no output"
 
-    phases = [l.split()[1:] for l in log.read_text(errors="replace").splitlines()
-              if l.startswith("@time")]
+    text = log.read_text(errors="replace")
+    phases = [l.split()[1:] for l in text.splitlines() if l.startswith("@time")]
     if status == "ok" and not phases:
         status = "no timing"
-    return status, output_sha, [*phases, time_cmd]
+    stats = parse_stats(text, c["dem"])
+    stats["max_rss_mb"] = f"{usage.ru_maxrss / 1024:.1f}"  # Linux reports KB
+    return status, output_sha, stats, [*phases, time_cmd]
 
 
 def main(names):
@@ -123,13 +170,17 @@ def main(names):
     done = set()
     if OUT.exists():
         with OUT.open(newline="") as f:
-            done = {tuple(r[k] for k in KEY) for r in csv.DictReader(f)
-                    if r["status"] == "ok"}
+            reader = csv.DictReader(f)
+            # appending rows under a different header would shift every column
+            if reader.fieldnames != COLUMNS:
+                sys.exit(f"{OUT} has different columns than bench.py writes; "
+                         "migrate it or move it aside")
+            done = {tuple(r[k] for k in KEY) for r in reader if r["status"] == "ok"}
 
     todo = [c for c in configs(names) if tuple(str(c[k]) for k in KEY) not in done]
     for i, c in enumerate(todo, 1):
         say(f"[{i}/{len(todo)}] {c}")
-        status, output_sha, phases = run(c, log_path(c))
+        status, output_sha, stats, phases = run(c, log_path(c))
         say(f"    {status}, {phases[-1][1]}s")
 
         new_file = not OUT.exists()
@@ -139,7 +190,8 @@ def main(names):
                 w.writerow(COLUMNS)
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
             for phase in phases:
-                w.writerow([stamp, *(c[k] for k in KEY), status, output_sha, *phase])
+                w.writerow([stamp, *(c[k] for k in KEY), status, output_sha,
+                            *(stats[k] for k in STATS), *phase])
 
 
 if __name__ == "__main__":

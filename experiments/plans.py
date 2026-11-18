@@ -34,7 +34,22 @@ def picked_viewpoints(name):
     return [tuple(map(int, line.split())) for line in path.read_text().splitlines()]
 
 
+# Block keys. Lists are crossed, so each combination is one run.
+#   code      list of binary paths (sha goes in the key)
+#   dem       list of .asc paths
+#   viewpoint list of (row, col) tuples
+#   height    list of heights above terrain, passed as -h
+#   threads   list of ints: sets OMP_NUM_THREADS, pins to cores 0..n-1
+#   schedule  optional list of OMP_SCHEDULE strings, default [""] (unset)
+#   args      optional flat list of extra vis args, default [] (not crossed;
+#             not in the key)
+#   reps      optional int, times each combination runs, default 1
+
 PLANS = {
+    "worst-case-test": [
+        dict(code=["bin/two_bit"], dem=[f"../research/DEM/{name}.asc"], viewpoint=points, height=[0], threads=[1])
+        for name, points in [("maine-knox-2m", [(0, 22996)]), ("washington-10m", [(30895, 5833)]), ("mtrainier-0.6m", [(22385, 4904)]), ("washington-10m", [(0, 10514)])]
+    ],
     "serial-timing-2": [
         dict(code=["bin/serial"], dem=[f"../research/DEM/{name}.asc"],
              viewpoint=picked_viewpoints(name), height=[0], threads=[1],
