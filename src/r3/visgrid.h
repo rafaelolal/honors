@@ -5,8 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Viewshed grid, 2 bits per cell, 4 cells per byte.
-// low bit: visible or not; high bit: nodata
+// Viewshed grid, 1 bit per cell, 8 per byte: visible or not. Nodata isn't
+// stored; writers take it from the elevation grid.
+
 #define NOT_VISIBLE 0
 #define VISIBLE 1
 #define VIS_NODATA 2
@@ -23,19 +24,32 @@ static inline size_t visgrid_index(const VisGrid* g, int r, int c) {
   return (size_t)r * g->ncols + c;
 }
 
-static inline uint8_t visgrid_get(const VisGrid* g, int r, int c) {
-  size_t i = visgrid_index(g, r, c);
-  return (g->data[i >> 2] >> ((i & 3) * 2)) & 3;
+// bytes needed for nrows * ncols cells
+static inline size_t visgrid_bytes(unsigned int nrows, unsigned int ncols) {
+  return ((size_t)nrows * ncols + 7) / 8;
 }
 
-// Not thread safe: the 4 cells in a byte share it, so parallel writers need
-// atomics or work split on byte boundaries.
-static inline void visgrid_set(VisGrid* g, int r, int c, uint8_t v) {
-  // a third bit would spill into the neighbouring cell
-  assert(v <= 3);
+// NOT_VISIBLE or VISIBLE
+static inline uint8_t visgrid_get(const VisGrid* g, int r, int c) {
   size_t i = visgrid_index(g, r, c);
-  int shift = (i & 3) * 2;
-  g->data[i >> 2] = (g->data[i >> 2] & ~(3u << shift)) | (v << shift);
+  return (g->data[i >> 3] >> (i & 7)) & 1;
+}
+
+// Each cell must be set at most once, and only from NOT_VISIBLE.
+// Not thread safe: cells share a byte, so parallel writers need atomics or
+// work split on byte boundaries.
+static inline void visgrid_set(VisGrid* g, int r, int c, uint8_t v) {
+  assert(v <= VIS_NODATA);
+  size_t i = visgrid_index(g, r, c);
+  // VIS_NODATA has no bit, so it stays NOT_VISIBLE
+  g->data[i >> 3] |= (uint8_t)((v == VISIBLE) << (i & 7));
+}
+
+// What a writer should show for a cell: VIS_NODATA wherever the DEM has no
+// data, which is the only way 1 bit can report it.
+static inline uint8_t visgrid_cell(const VisGrid* g, const Grid* elev, int r,
+                                   int c) {
+  return grid_is_nodata(elev, r, c) ? VIS_NODATA : visgrid_get(g, r, c);
 }
 
 // all cells start NOT_VISIBLE

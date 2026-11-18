@@ -7,12 +7,15 @@ VisGrid* visgrid_init(unsigned int nrows, unsigned int ncols) {
   VisGrid* g = (VisGrid*)malloc(sizeof(VisGrid));
   g->nrows = nrows;
   g->ncols = ncols;
-  size_t bytes = ((size_t)nrows * ncols + 3) / 4;
+  size_t bytes = visgrid_bytes(nrows, ncols);
   g->data = (uint8_t*)malloc(bytes);
-  // big grids can run out of memory, which would crash on first access
-  assert(g->data);
-  // zero is NOT_VISIBLE; writing also touches the pages now, so page faults
-  // aren't counted as viewshed time
+  // not an assert: those are compiled out in timing builds
+  if (!g->data) {
+    printf("cannot allocate %zu bytes for the viewshed grid\n", bytes);
+    exit(1);
+  }
+  // all-zero bytes are NOT_VISIBLE; writing also touches the pages now, so
+  // page faults aren't counted as viewshed time
   memset(g->data, 0, bytes);
   return g;
 }
@@ -34,10 +37,10 @@ void visgrid_write_to_file(const char* filename, const VisGrid* g,
   // same text as the old float grid, so outputs stay byte-identical
   char nodata[64];
   snprintf(nodata, sizeof nodata, "%f ", elev->nodata_value);
-  const char* text[4] = {"0.000000 ", "1.000000 ", nodata, nodata};
+  const char* text[3] = {"0.000000 ", "1.000000 ", nodata};
   for (unsigned int r = 0; r < g->nrows; r++) {
     for (unsigned int c = 0; c < g->ncols; c++) {
-      fputs(text[visgrid_get(g, r, c)], f);
+      fputs(text[visgrid_cell(g, elev, r, c)], f);
     }
     fputs("\n", f);
   }

@@ -3,14 +3,11 @@
 #include "map.h"
 #include "bmp.h"
 #include "grid.h"
-#include "pixel_buffer.h"
 #include <vector>
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
-
-// used to compare float values
-#define EPSILON .001
 
 Color NODATA_COLOR = {0, 0, 1}; // blue
 
@@ -24,7 +21,7 @@ Color INVIS_COLOR = {.6, .6, .6}; // gray
 float VIEWPOINT_RADIUS = .01;
 Color VIEWPOINT_COLOR = {1, .2, .3};
 
-static const u8 max_rgb_value = 0xffu;
+static const uint8_t max_rgb_value = 0xffu;
 
 float dist(int x1, int y1, int x2, int y2) {
   // 64-bit: on big grids like Knox, the sum of squares overflows an int
@@ -217,22 +214,10 @@ float hillshade_at(const Grid* grid, int r, int c) {
 }
 
 ////////////////////////////////////////////////////////////
-void generate_hillshade(const Grid* grid, Grid* hillshade_grid) {
-  printf("sun zenith rad = %.1f\n", sun_zenith_rad());
-  printf("sun azimuth rad = %.1f\n", sun_azimuth_rad());
-
-  for (int i = 0; i < grid->nrows; i++)
-    for (int j = 0; j < grid->ncols; j++)
-      grid_set(hillshade_grid, i, j, hillshade_at(grid, i, j));
-
-  printf("some stats:\n");
-  printf("\thillshaderange: [%.1f, %.1f]\n", hillshade_grid->min_value,
-         hillshade_grid->max_value);
-}
-
-////////////////////////////////////////////////////////////
 // color in [0,1] to a byte, truncating like the old pixel buffer code
-static u8 to_byte(float v) { return (u8)(u16)(v * max_rgb_value); }
+static uint8_t to_byte(float v) {
+  return (uint8_t)(uint16_t)(v * max_rgb_value);
+}
 
 void write_bitmaps(const Grid* elev, const VisGrid* vis, int vr, int vc,
                    float alpha, const char* hillshade_path,
@@ -249,22 +234,22 @@ void write_bitmaps(const Grid* elev, const VisGrid* vis, int vr, int vc,
   bmp_open(&hb, hillshade_path, w, h);
   bmp_open(&vb, viewshed_path, w, h);
   bmp_open(&ob, overlay_path, w, h);
-  std::vector<u8> hrow(3 * (size_t)w), vrow(3 * (size_t)w), orow(3 * (size_t)w);
+  std::vector<uint8_t> hrow(3 * (size_t)w), vrow(3 * (size_t)w), orow(3 * (size_t)w);
 
   // BMP stores rows bottom-up
   for (int r = h - 1; r >= 0; r--) {
     for (int c = 0; c < w; c++) {
-      u8* hp = &hrow[3 * (size_t)c];
-      u8* vp = &vrow[3 * (size_t)c];
-      u8* op = &orow[3 * (size_t)c];
+      uint8_t* hp = &hrow[3 * (size_t)c];
+      uint8_t* vp = &vrow[3 * (size_t)c];
+      uint8_t* op = &orow[3 * (size_t)c];
 
       float shade = hillshade_at(elev, r, c);
       for (int i = 0; i < 3; i++)
         hp[i] = shade == elev->nodata_value ? to_byte(NODATA_COLOR[i])
-                                            : (u8)(u16)shade;
+                                            : (uint8_t)(uint16_t)shade;
 
-      uint8_t v = visgrid_get(vis, r, c);
-      const float* color = (v & VIS_NODATA)           ? NODATA_COLOR
+      uint8_t v = visgrid_cell(vis, elev, r, c);
+      const float* color = v == VIS_NODATA           ? NODATA_COLOR
                            : dist(vr, vc, r, c) < rad ? VIEWPOINT_COLOR
                            : v == VISIBLE             ? VIS_COLOR
                                                       : INVIS_COLOR;
@@ -282,123 +267,4 @@ void write_bitmaps(const Grid* elev, const VisGrid* vis, int vr, int vc,
   bmp_close(&hb);
   bmp_close(&vb);
   bmp_close(&ob);
-}
-
-///////////////////////////////////////////////////////////
-// flow_grid: grid of flow accumulation  values
-// nintervals: number of height and color intervals
-// color gradient of blue. height intervals are not equal but logarithmic
-void grid_vis_to_pixelbuffer(const VisGrid* vis_grid, int vr, int vc,
-                             PixelBuffer pb) {
-
-  float rad = (float)VIEWPOINT_RADIUS * (float)vis_grid->nrows;
-  printf("rad = %.1f\n", rad);
-
-  // write values in pb
-  float color[3];
-  for (u16 y = 0; y < pb.height; y++) {
-    for (u16 x = 0; x < pb.width; x++) {
-
-      uint8_t vis = visgrid_get(vis_grid, y, x);
-      if (vis & VIS_NODATA) {
-        for (int i = 0; i < 3; i++)
-          color[i] = NODATA_COLOR[i];
-      } else if (dist((u16)vr, (u16)vc, (u16)y, (u16)x) < rad) {
-        for (int i = 0; i < 3; i++)
-          color[i] = VIEWPOINT_COLOR[i];
-      } else {
-        if (vis == VISIBLE) {
-          // visible
-          for (int i = 0; i < 3; i++)
-            color[i] = VIS_COLOR[i];
-        } else {
-          // invisible
-          for (int i = 0; i < 3; i++)
-            color[i] = INVIS_COLOR[i];
-        }
-      }
-
-      // bring it from [0,1] to [0, 255]
-      u16 rgb_color[3] = {(u16)(color[0] * max_rgb_value),
-                          (u16)(color[1] * max_rgb_value),
-                          (u16)(color[2] * max_rgb_value)};
-
-      write_pixel_to_buffer(&pb, x, y, rgb_color[0], rgb_color[1],
-                            rgb_color[2]);
-    }
-  }
-}
-
-////////////////////////////////////////////////////////////
-// this grid contains values 0..255, put  those in a pixelbuffer
-void grid_to_pixelbuffer(const Grid* grid, PixelBuffer pb) {
-  // write values in pb
-  u16 rgb_color[3];
-  for (u16 y = 0; y < pb.height; y++) {
-    for (u16 x = 0; x < pb.width; x++) {
-
-      float shade = grid_get(grid, y, x); // shade  of this pixel
-      if (grid_is_nodata(grid, y, x)) {
-        // set this pixel to nodata color
-        for (int i = 0; i < 3; i++)
-          rgb_color[i] = (u16)255 * NODATA_COLOR[i];
-      } else {
-        // set this pixel to its value
-        rgb_color[0] = (u16)shade;
-        rgb_color[1] = (u16)shade;
-        rgb_color[2] = (u16)shade;
-      }
-      write_pixel_to_buffer(&pb, x, y, rgb_color[0], rgb_color[1],
-                            rgb_color[2]);
-
-    } // for x
-  } // for y
-}
-
-////////////////////////////////////////////////////////////
-// overlay pb2 on top of pb1, with given transparency alpha. when
-// alpha=1, show pb1; when alpha=0, show pb2. write the output in pb1
-void pixelbuffer_overlay(PixelBuffer pb1, PixelBuffer pb2, float alpha) {
-
-  // outside this range, the blended colors overflow into wrong values
-  assert(alpha >= 0 && alpha <= 1);
-
-  // both buffers are read with pb1's loop bounds, so a smaller pb2 reads past
-  // its end
-  assert(pb1.height == pb2.height && pb1.width == pb2.width);
-
-  for (u16 y = 0; y < pb1.height; y++) {
-    for (u16 x = 0; x < pb1.width; x++) {
-
-      const u32 pixel1 = pb1.pixels[y * pb1.width + x];
-      const u32 pixel2 = pb2.pixels[y * pb2.width + x];
-
-      // get colors
-      // static const u32 alpha_mask = 0xffu << 24u;
-      // const u32 pixel = alpha_mask | (u32) (b << 16u) | (u32) (g << 8u) | r;
-      u16 color1[3], color2[3];
-      u32 red_mask = 0xff;
-      u32 green_mask = 0xff << 8u;
-      u32 blue_mask = 0xff << 16u;
-      color1[0] = pixel1 & red_mask;
-      color1[1] = (pixel1 & green_mask) >> 8u;
-      color1[2] = (pixel1 & blue_mask) >> 16u;
-      // printf("red mask = %ux green mask = %ux blue mask = %ux\n", red_mask,
-      // green_mask, blue_mask); printf("pixel1=%x, r=%x g=%x b=%x\n", pixel1,
-      // color1[0], color1[1], color1[2] );
-
-      color2[0] = pixel2 & red_mask;
-      color2[1] = (pixel2 & green_mask) >> 8u;
-      color2[2] = (pixel2 & blue_mask) >> 16u;
-
-      u16 rgb_color[3];
-      for (int i = 0; i < 3; i++) {
-        rgb_color[i] =
-            color2[i] + (u16)(alpha * (float)(color1[i] - color2[i]));
-      }
-
-      write_pixel_to_buffer(&pb1, x, y, rgb_color[0], rgb_color[1],
-                            rgb_color[2]);
-    }
-  }
 }
