@@ -2,8 +2,6 @@
 #include "grid.h"
 #include <cassert>
 
-using namespace std;
-
 /* ---------------------------------------------------------------------------
    is_point_visible
 
@@ -32,46 +30,25 @@ using namespace std;
    Return 1 unconditionally to start, look at the output, then tighten it.
 --------------------------------------------------------------------------- */
 
-float distance(float first_y, float first_x, float second_y, float second_x) {
-  float dy = second_y - first_y;
-  float dx = second_x - first_x;
-  return sqrt(dy * dy + dx * dx);
-}
-
-float slope(float viewpoint_y, float viewpoint_x, float viewpoint_height,
-            float target_y, float target_x, float target_height) {
-
-  float d = distance(viewpoint_y, viewpoint_x, target_y, target_x);
-  // This has to be here because if the distance is zero (viewpoint ~ target),
-  // then we have a division by zero below
-  if (d == 0) {
-    return 0;
-  }
-
-  return (target_height - viewpoint_height) / d;
-}
-
 // Interpolates between two neighboring cells. value is the fractional position
-// along the interpolated axis; coordinate is the exact position on the other.
-float interpolate(int interpolate_y, float value, int coordinate,
-                  const Grid* dem) {
-  // any other value would step diagonally or skip a cell below
-  assert(interpolate_y == 0 || interpolate_y == 1);
-  // a negative value truncates toward 0, silently giving the wrong cell
+// along the interpolated axis while coordinate is the exact position on the
+// other.
+template <int IY>
+static inline float interpolate(float value, int coordinate, const Grid* dem,
+                                bool* nodata) {
+  // a negative value means something went wrong...
   assert(value >= 0);
   int below = static_cast<int>(value);
   float t = value - below;
 
-  int r = interpolate_y ? below : coordinate;
-  int c = interpolate_y ? coordinate : below;
+  int r = IY ? below : coordinate;
+  int c = IY ? coordinate : below;
   float h1 = grid_get(dem, r, c);
   // The next cell along the interpolated axis. ! flips 0 and 1, so exactly one
-  // of r and c moves by 1: r if interpolate_y is 1, c if it's 0.
-  float h2 = grid_get(dem, r + interpolate_y, c + !interpolate_y);
+  // of r and c moves by 1 -> r if IY is 1, c if it's 0.
+  float h2 = grid_get(dem, r + IY, c + !IY);
 
-  if (h1 == dem->nodata_value || h2 == dem->nodata_value) {
-    return dem->nodata_value;
-  }
+  *nodata = (h1 == dem->nodata_value) | (h2 == dem->nodata_value);
 
   // 1.0f avoids unnecessary conversion to double
   return h1 * (1.0f - t) + h2 * t;
@@ -80,21 +57,31 @@ float interpolate(int interpolate_y, float value, int coordinate,
 // Checks where the ray crosses one family of grid lines. "line" is the axis we
 // step along and "other" is the axis we solve for. Returns VISIBLE if the ray
 // gets through, otherwise NOT_VISIBLE or VIS_NODATA.
-static uint8_t check_crossings(const Grid* elev_grid, int interpolate_y,
-                               int start, int end, int other_start,
-                               float other_step, float vz, float los_slope) {
+template <int IY>
+static uint8_t check_crossings(const Grid* elev_grid, int start, int end,
+                               float other_start, float other_step, float vz,
+                               float target_rise) {
   int dir = end > start ? 1 : -1;
-  int steps = abs(end - start);
-  for (int k = 1; k < steps; k++) {
-    int line = start + k * dir;
-    float other = other_start + static_cast<float>(line - start) * other_step;
-    float height = interpolate(interpolate_y, other, line, elev_grid);
-    if (height == elev_grid->nodata_value) {
+  // Multiply by dir to have positive sign
+  int steps = dir * (end - start);
+  // Float copies of steps and k
+  // the int ones run the loop
+  // the float ones do the math without need for conversting all the time
+  float steps_f = steps;
+  float k_f = 1.0f;
+  // folding in dir only flips the sign, so it's exact
+  other_step *= dir;
+
+  int line = start + dir;
+  for (int k = 1; k < steps; k++, k_f++, line += dir) {
+    float other = other_start + k_f * other_step;
+    bool nodata;
+    float height = interpolate<IY>(other, line, elev_grid, &nodata);
+    if (nodata) {
       return VIS_NODATA;
     }
 
-    float s = slope(start, other_start, vz, line, other, height);
-    if (s > los_slope) {
+    if ((height - vz) * steps_f > target_rise * k_f) {
       return NOT_VISIBLE;
     }
   }
@@ -116,18 +103,19 @@ uint8_t is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
   float vz = grid_get(elev_grid, vr, vc) + vh;
   float pz = grid_get(elev_grid, r, c);
 
-  // slope from viewpoint to target
-  float los_slope = slope(vr, vc, vz, r, c, pz);
+  // height of the target above the viewpoint
+  float target_rise = pz - vz;
 
   // horizontal angle from viewpoint to target
   float dy = r - vr;
   float dx = c - vc;
 
-  // Vertical intersections, then horizontal ones
+  // Vertical intersections, then horizontal ones. The two divisions are once
+  // per target, for where the ray sits on the other axis.
   uint8_t result =
-      check_crossings(elev_grid, 1, vc, c, vr, dy / dx, vz, los_slope);
+      check_crossings<1>(elev_grid, vc, c, vr, dy / dx, vz, target_rise);
   if (result == VISIBLE) {
-    result = check_crossings(elev_grid, 0, vr, r, vc, dx / dy, vz, los_slope);
+    result = check_crossings<0>(elev_grid, vr, r, vc, dx / dy, vz, target_rise);
   }
   return result;
 }
@@ -135,7 +123,6 @@ uint8_t is_point_visible(const Grid* elev_grid, int r, int c, int vr, int vc,
 long compute_viewshed_grid(const Grid* elev_grid, VisGrid* vis_grid, int vr,
                            int vc, float vh) {
 
-  // a nodata viewpoint has no height
   // grid_get also checks it's inside the grid
   assert(!grid_is_nodata(elev_grid, vr, vc));
 

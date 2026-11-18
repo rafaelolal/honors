@@ -4,9 +4,6 @@
 #include "grid.h"
 #include "visgrid.h"
 
-// debug output level (0=off, 1=verbose); defined in vismain.cpp, set with -d
-extern int DEBUG_LEVEL;
-
 /* elev_grid: input elevation grid
    r, c:      the point being tested
    vr, vc:    viewpoint row and column
