@@ -10,11 +10,11 @@ typedef float Color[3];
 
 // indexed by DiffClass
 static const Color DIFF_COLORS[] = {
-    {0, 1, 0},    // DIFF_ADDED: green
-    {1, 0, 0},    // DIFF_REMOVED: red
+    {0, 1, 0},    // DIFF_FP: green
+    {1, 0, 0},    // DIFF_FN: red
     {1, 1, 0},    // DIFF_NODATA_MISMATCH: yellow
-    {.6, .6, .6}, // DIFF_SAME_VIS: gray
-    {0, 0, 0},    // DIFF_SAME_INVIS: black
+    {.6, .6, .6}, // DIFF_TP: gray
+    {0, 0, 0},    // DIFF_TN: black
     {0, 0, 1},    // DIFF_SAME_NODATA: blue
 };
 
@@ -82,8 +82,8 @@ DiffClass diff_class(uint8_t primary, uint8_t secondary) {
   if (pn || sn)
     return DIFF_NODATA_MISMATCH;
   if (primary == secondary)
-    return primary == CELL_VISIBLE ? DIFF_SAME_VIS : DIFF_SAME_INVIS;
-  return secondary == CELL_VISIBLE ? DIFF_ADDED : DIFF_REMOVED;
+    return primary == CELL_VISIBLE ? DIFF_TP : DIFF_TN;
+  return secondary == CELL_VISIBLE ? DIFF_FP : DIFF_FN;
 }
 
 DiffCounts write_diff_bitmaps(const Viewshed* primary,

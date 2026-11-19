@@ -36,7 +36,8 @@ void grid_read_header(FILE* in_file, Grid* grid) {
       fscanf(in_file, "xllcorner %f\n", &grid->xllcorner) != 1 ||
       fscanf(in_file, "yllcorner %f\n", &grid->yllcorner) != 1 ||
       fscanf(in_file, "cellsize %f\n", &grid->cellsize) != 1 ||
-      fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value) != 1) {
+      fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value) != 1 ||
+      grid->nrows <= 0 || grid->ncols <= 0) {
     printf("bad grid header\n");
     exit(1);
   }
@@ -45,7 +46,7 @@ void grid_read_header(FILE* in_file, Grid* grid) {
 // allocate space for the grid data.
 void grid_malloc_data(Grid* grid) {
   if (!grid->data) {
-    grid->data = (float*)malloc(grid->nrows * grid->ncols * sizeof(float));
+    grid->data = (float*)malloc((size_t)grid->nrows * grid->ncols * sizeof(float));
     // big grids can run out of memory, which would crash later on first access
     assert(grid->data);
   }

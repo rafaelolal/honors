@@ -1,8 +1,8 @@
-// visdiff: git-style diff of two viewshed .asc grids.
+// visdiff: compares a viewshed .asc against a reference .asc.
 //
-// Draws the secondary grid colored by how each cell compares with the
-// primary: green added, red removed, yellow nodata in only one, gray visible
-// in both, black visible in neither, blue nodata in both.
+// With the reference as truth, each cell is TP (visible in both), TN (in
+// neither), FP (only in ours) or FN (only in the reference). Prints the
+// counts, the error rates and a color key for the diff bitmap.
 // Exit code like git diff --exit-code: 0 identical, 1 different, 2 error.
 
 #include "diff.h"
@@ -15,7 +15,7 @@
 #include <string>
 
 static const char usage[] =
-    "Usage: %s [-e <elev.asc>] [-o <prefix>] <primary.asc> <secondary.asc>\n"
+    "Usage: %s [-e <elev.asc>] [-o <prefix>] <reference.asc> <ours.asc>\n"
     "    -e   Optional. DEM to also draw the diff over its hillshade\n"
     "    -o   Optional. Output name prefix in out/ (default: diff)\n";
 
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
   Viewshed* secondary = viewshed_read(secondary_name, &sh);
 
   if (ph.nrows != sh.nrows || ph.ncols != sh.ncols) {
-    printf("grids differ in size: %u x %u vs %u x %u\n", ph.nrows, ph.ncols,
+    printf("grids differ in size: %d x %d vs %d x %d\n", ph.nrows, ph.ncols,
            sh.nrows, sh.ncols);
     return 2;
   }
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
   if (elev_name) {
     elev = grid_read_from_file((char*)elev_name);
     if (elev->nrows != ph.nrows || elev->ncols != ph.ncols) {
-      printf("DEM is %u x %u but the grids are %u x %u\n", elev->nrows,
+      printf("DEM is %d x %d but the grids are %d x %d\n", elev->nrows,
              elev->ncols, ph.nrows, ph.ncols);
       return 2;
     }
@@ -80,18 +80,37 @@ int main(int argc, char** argv) {
       write_diff_bitmaps(primary, secondary, elev, .5, flat_path.c_str(),
                          elev ? overlay_path.c_str() : NULL);
 
-  long cells = (long)ph.nrows * ph.ncols;
-  long changed =
-      d.n[DIFF_ADDED] + d.n[DIFF_REMOVED] + d.n[DIFF_NODATA_MISMATCH];
-  printf("primary:   %s (%u x %u)\n", primary_name, ph.nrows, ph.ncols);
-  printf("secondary: %s\n", secondary_name);
-  printf("+%ld added, -%ld removed, %ld nodata mismatch, %ld changed "
-         "(%.4f%% of cells)\n",
-         d.n[DIFF_ADDED], d.n[DIFF_REMOVED], d.n[DIFF_NODATA_MISMATCH],
-         changed, 100.0 * changed / cells);
-  printf("unchanged: %ld visible, %ld not visible, %ld nodata\n",
-         d.n[DIFF_SAME_VIS], d.n[DIFF_SAME_INVIS], d.n[DIFF_SAME_NODATA]);
-  printf("wrote %s%s%s\n", flat_path.c_str(), elev ? ", " : "",
+  long tp = d.n[DIFF_TP], tn = d.n[DIFF_TN], fp = d.n[DIFF_FP],
+       fn = d.n[DIFF_FN];
+  long n = tp + tn + fp + fn;
+  long changed = fp + fn + d.n[DIFF_NODATA_MISMATCH];
+
+  printf("reference: %s (%d x %d)\n", primary_name, ph.nrows, ph.ncols);
+  printf("ours:      %s\n", secondary_name);
+  printf("\n%-6s %-7s %-26s %15s\n", "class", "color", "meaning", "cells");
+  printf("%-6s %-7s %-26s %15ld\n", "TP", "gray", "visible in both", tp);
+  printf("%-6s %-7s %-26s %15ld\n", "TN", "black", "visible in neither", tn);
+  printf("%-6s %-7s %-26s %15ld\n", "FP", "green", "visible only in ours", fp);
+  printf("%-6s %-7s %-26s %15ld\n", "FN", "red", "visible only in reference",
+         fn);
+  printf("%-6s %-7s %-26s %15ld\n", "-", "yellow", "nodata in only one",
+         d.n[DIFF_NODATA_MISMATCH]);
+  printf("%-6s %-7s %-26s %15ld\n", "-", "blue", "nodata in both",
+         d.n[DIFF_SAME_NODATA]);
+
+  printf("\nN = TP + TN + FP + FN = %ld (nodata excluded)\n", n);
+  // ratio, or n/a when the denominator is 0
+  auto ratio = [](const char* name, long num, long den) {
+    if (den)
+      printf("%-37s = %.6f (%.4f%%)\n", name, (double)num / den,
+             100.0 * num / den);
+    else
+      printf("%-37s = n/a\n", name);
+  };
+  ratio("error rate      (FP + FN) / N", fp + fn, n);
+  ratio("relative error  (FP + FN) / (TP + FN)", fp + fn, tp + fn);
+
+  printf("\nwrote %s%s%s\n", flat_path.c_str(), elev ? ", " : "",
          elev ? overlay_path.c_str() : "");
 
   viewshed_free(primary);

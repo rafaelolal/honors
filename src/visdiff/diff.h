@@ -12,14 +12,14 @@
 #define CELL_NODATA 2
 
 typedef struct {
-  unsigned int nrows;
-  unsigned int ncols;
+  int nrows;
+  int ncols;
   uint8_t* data;
 } Viewshed;
 
 static inline uint8_t viewshed_get(const Viewshed* v, int r, int c) {
   // out of bounds would read the wrong cell
-  assert(r >= 0 && r < (int)v->nrows && c >= 0 && c < (int)v->ncols);
+  assert(r >= 0 && r < v->nrows && c >= 0 && c < v->ncols);
   size_t i = (size_t)r * v->ncols + c;
   return (v->data[i >> 2] >> ((i & 3) * 2)) & 3;
 }
@@ -30,13 +30,13 @@ Viewshed* viewshed_read(const char* filename, Grid* header);
 
 void viewshed_free(Viewshed* v);
 
-// How a cell compares between a primary and a secondary viewshed
+// How a cell compares, with the primary (reference) as truth
 typedef enum {
-  DIFF_ADDED,           // 0 -> 1
-  DIFF_REMOVED,         // 1 -> 0
+  DIFF_FP,              // visible only in secondary
+  DIFF_FN,              // visible only in primary
   DIFF_NODATA_MISMATCH, // nodata in exactly one
-  DIFF_SAME_VIS,        // 1 -> 1
-  DIFF_SAME_INVIS,      // 0 -> 0
+  DIFF_TP,              // visible in both
+  DIFF_TN,              // visible in neither
   DIFF_SAME_NODATA,     // nodata in both
   DIFF_NCLASSES
 } DiffClass;
