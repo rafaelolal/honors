@@ -25,6 +25,7 @@ import threading
 import time
 from pathlib import Path
 
+import viewpoints
 from plans import PLANS
 
 TIMEOUT = 4 * 3600  # seconds, per run
@@ -49,6 +50,11 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:12]
 
 
+def viewpoints_for(spec, dem):
+    """A block's viewpoint list, picking random ones for a Random spec."""
+    return viewpoints.sample(dem, spec) if isinstance(spec, viewpoints.Random) else spec
+
+
 def configs(names):
     # reps are the outer loop, so slow drift overnight doesn't favor one config;
     # a block drops out once its own reps (default 1) are done
@@ -58,9 +64,10 @@ def configs(names):
             for b in PLANS[name]:
                 if rep >= b.get("reps", 1):
                     continue
-                for code, dem, (vr, vc), vh, threads, schedule in itertools.product(
-                    b["code"], b["dem"], b["viewpoint"], b["height"], b["threads"],
-                    b.get("schedule", [""]),
+                for dem, code, (vr, vc), vh, threads, schedule in (
+                    (dem, *rest) for dem in b["dem"] for rest in itertools.product(
+                        b["code"], viewpoints_for(b["viewpoint"], dem), b["height"],
+                        b["threads"], b.get("schedule", [""]))
                 ):
                     # args isn't in KEY: keep one set of args per experiment
                     yield dict(experiment=name, code=code, binary_sha=sha(code),
