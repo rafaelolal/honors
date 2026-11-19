@@ -47,7 +47,7 @@ void grid_read_header(FILE* in_file, Grid* grid) {
 // allocate space for the grid data.
 void grid_malloc_data(Grid* grid) {
   if (!grid->data) {
-    grid->data = (float*)malloc(grid->nrows * grid->ncols * sizeof(float));
+    grid->data = (float*)malloc((size_t)grid->nrows * grid->ncols * sizeof(float));
     assert(grid->data);
   }
 }

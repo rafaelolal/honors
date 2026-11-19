@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
   Grid* elev_grid = grid_read_from_file(o.elev_name);
   grid_print_stats(elev_grid, o.elev_name);
   // "@stat name value" lines are parsed by experiments/bench.py
-  printf("@stat nrows %u\n@stat ncols %u\n@stat min_h %f\n@stat max_h %f\n"
+  printf("@stat nrows %d\n@stat ncols %d\n@stat min_h %f\n@stat max_h %f\n"
          "@stat nodata %d\n",
          elev_grid->nrows, elev_grid->ncols, elev_grid->min_value,
          elev_grid->max_value, elev_grid->nb_nodata_values);

@@ -11,8 +11,8 @@
 #include <stdlib.h>
 
 typedef struct _grid {
-  unsigned int ncols;
-  unsigned int nrows;
+  int ncols;
+  int nrows;
   float* data;
   float* data_d;
 
@@ -29,7 +29,7 @@ typedef struct _grid {
 
 // TODO: why is this here? It's not used.
 typedef struct gridpoint {
-  unsigned int r, c;
+  int r, c;
 } GridPoint;
 
 static inline int inside_grid(const Grid* grid, int r, int c) {

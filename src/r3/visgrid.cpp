@@ -3,8 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-VisGrid* visgrid_init(unsigned int nrows, unsigned int ncols) {
+VisGrid* visgrid_init(int nrows, int ncols) {
   VisGrid* g = (VisGrid*)malloc(sizeof(VisGrid));
+  if (!g) {
+    printf("cannot allocate the viewshed grid struct\n");
+    exit(1);
+  }
   g->nrows = nrows;
   g->ncols = ncols;
   size_t bytes = visgrid_bytes(nrows, ncols);
@@ -38,8 +42,8 @@ void visgrid_write_to_file(const char* filename, const VisGrid* g,
   char nodata[64];
   snprintf(nodata, sizeof nodata, "%f ", elev->nodata_value);
   const char* text[3] = {"0.000000 ", "1.000000 ", nodata};
-  for (unsigned int r = 0; r < g->nrows; r++) {
-    for (unsigned int c = 0; c < g->ncols; c++) {
+  for (int r = 0; r < g->nrows; r++) {
+    for (int c = 0; c < g->ncols; c++) {
       fputs(text[visgrid_cell(g, elev, r, c)], f);
     }
     fputs("\n", f);

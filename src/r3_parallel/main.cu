@@ -35,8 +35,8 @@ constexpr float PI = 3.141592653589793;
 /* ************************************************************ */
 
 typedef struct _grid {
-  unsigned int ncols;
-  unsigned int nrows;
+  int ncols;
+  int nrows;
   float* data;
   float* d_data;
 
@@ -98,7 +98,7 @@ Grid* grid_init() {
 // allocate space for the grid data.
 void grid_malloc_data(Grid* grid) {
   if (!grid->data) {
-    grid->data = (float*)malloc(grid->nrows * grid->ncols * sizeof(float));
+    grid->data = (float*)malloc((size_t)grid->nrows * grid->ncols * sizeof(float));
     assert(grid->data);
   }
 }
@@ -119,7 +119,8 @@ Grid* grid_read_from_file(const char* filename) {
       fscanf(in_file, "xllcorner %f\n", &grid->xllcorner) != 1 ||
       fscanf(in_file, "yllcorner %f\n", &grid->yllcorner) != 1 ||
       fscanf(in_file, "cellsize %f\n", &grid->cellsize) != 1 ||
-      fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value) != 1) {
+      fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value) != 1 ||
+      grid->nrows <= 0 || grid->ncols <= 0) {
     printf("bad header in %s\n", filename);
     exit(1);
   }

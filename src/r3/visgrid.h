@@ -13,19 +13,19 @@
 #define VIS_NODATA 2
 
 typedef struct {
-  unsigned int nrows;
-  unsigned int ncols;
+  int nrows;
+  int ncols;
   uint8_t* data;
 } VisGrid;
 
 static inline size_t visgrid_index(const VisGrid* g, int r, int c) {
   // out of bounds would read or corrupt the wrong cell
-  assert(r >= 0 && r < (int)g->nrows && c >= 0 && c < (int)g->ncols);
+  assert(r >= 0 && r < g->nrows && c >= 0 && c < g->ncols);
   return (size_t)r * g->ncols + c;
 }
 
 // bytes needed for nrows * ncols cells
-static inline size_t visgrid_bytes(unsigned int nrows, unsigned int ncols) {
+static inline size_t visgrid_bytes(int nrows, int ncols) {
   return ((size_t)nrows * ncols + 7) / 8;
 }
 
@@ -53,7 +53,7 @@ static inline uint8_t visgrid_cell(const VisGrid* g, const Grid* elev, int r,
 }
 
 // all cells start NOT_VISIBLE
-VisGrid* visgrid_init(unsigned int nrows, unsigned int ncols);
+VisGrid* visgrid_init(int nrows, int ncols);
 
 // header and nodata value come from elev, so the .asc matches the DEM
 void visgrid_write_to_file(const char* filename, const VisGrid* g,

@@ -1,6 +1,5 @@
 // Laura Toma
 //
-#include <assert.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -22,6 +21,10 @@ void grid_print_stats(const Grid* g, char* name) {
 Grid* grid_init() {
   Grid* grid;
   grid = (Grid*)malloc(sizeof(Grid));
+  if (!grid) {
+    printf("cannot allocate the grid struct\n");
+    exit(1);
+  }
   grid->data = NULL;
   grid->min_value = (float)INT_MAX;
   grid->max_value = (float)-INT_MAX;
@@ -37,7 +40,8 @@ void grid_read_header(FILE* in_file, Grid* grid) {
       fscanf(in_file, "xllcorner %f\n", &grid->xllcorner) != 1 ||
       fscanf(in_file, "yllcorner %f\n", &grid->yllcorner) != 1 ||
       fscanf(in_file, "cellsize %f\n", &grid->cellsize) != 1 ||
-      fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value) != 1) {
+      fscanf(in_file, "NODATA_value %f\n", &grid->nodata_value) != 1 ||
+      grid->nrows <= 0 || grid->ncols <= 0) {
     printf("bad grid header\n");
     exit(1);
   }
@@ -71,8 +75,7 @@ void grid_read_data(FILE* in_file, Grid* grid) {
   // raw writes; stats are computed once after the read
   for (size_t i = 0; i < n; i++) {
     if (fscanf(in_file, "%f ", &grid->data[i]) != 1) {
-      printf("bad grid data at (%zu, %zu)\n", i / grid->ncols,
-             i % grid->ncols);
+      printf("bad grid data at (%zu, %zu)\n", i / grid->ncols, i % grid->ncols);
       exit(1);
     }
   }

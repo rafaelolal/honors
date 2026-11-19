@@ -7,8 +7,8 @@
 #include <stdio.h>
 
 typedef struct _grid {
-  unsigned int ncols;
-  unsigned int nrows;
+  int ncols;
+  int nrows;
   float* data;
 
   float xllcorner;

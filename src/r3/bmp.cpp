@@ -1,5 +1,4 @@
 #include "bmp.h"
-#include <assert.h>
 #include <stdlib.h>
 
 static void put16(uint8_t* p, uint16_t v) {
@@ -13,7 +12,10 @@ static void put32(uint8_t* p, uint32_t v) {
 }
 
 void bmp_open(BmpWriter* b, const char* path, int width, int height) {
-  assert(width > 0 && height > 0);
+  if (width <= 0 || height <= 0) {
+    printf("bad bitmap size %d x %d\n", width, height);
+    exit(1);
+  }
   b->width = width;
   b->row_bytes = ((size_t)width * 3 + 3) & ~(size_t)3;
   uint64_t image = (uint64_t)b->row_bytes * height;
@@ -46,7 +48,10 @@ void bmp_open(BmpWriter* b, const char* path, int width, int height) {
 
   // calloc so the padding bytes are always zero
   b->row = (uint8_t*)calloc(b->row_bytes, 1);
-  assert(b->row);
+  if (!b->row) {
+    printf("cannot allocate %zu bytes for a bitmap row\n", b->row_bytes);
+    exit(1);
+  }
 }
 
 void bmp_write_row(BmpWriter* b, const uint8_t* rgb) {
