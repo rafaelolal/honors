@@ -50,9 +50,16 @@ void grid_read_header(FILE* in_file, Grid* grid) {
 // allocate space for the grid data.
 void grid_malloc_data(Grid* grid) {
   if (!grid->data) {
-    grid->data = (float*)malloc(grid->nrows * grid->ncols * sizeof(float));
-    // big grids can run out of memory, which would crash later on first access
-    assert(grid->data);
+    size_t cells = (size_t)grid->nrows * grid->ncols;
+    size_t bytes = (cells + grid->ncols) * sizeof(float);
+    grid->data = (float*)malloc(bytes);
+    if (!grid->data) {
+      printf("cannot allocate %zu bytes for the elevation grid\n", bytes);
+      exit(1);
+    }
+    // not NaN, so it never reads as nodata
+    for (size_t i = cells; i < cells + grid->ncols; i++)
+      grid->data[i] = 0.0f;
   }
 }
 
@@ -66,6 +73,8 @@ static void grid_compute_stats(Grid* grid) {
       grid->max_value = fmax(val, grid->max_value);
     } else {
       grid->nb_nodata_values++;
+      // NaN, so vis.cpp's visibility test also catches nodata
+      grid->data[i] = NAN;
     }
   }
 }

@@ -4,6 +4,7 @@
 #define __grid_h
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 
 typedef struct _grid {
@@ -33,7 +34,8 @@ static inline float grid_get(const Grid* grid, int r, int c) {
 }
 
 static inline bool grid_is_nodata(const Grid* grid, int r, int c) {
-  return grid->nodata_value == grid_get(grid, r, c);
+  // nodata cells are stored as NaN
+  return isnan(grid_get(grid, r, c));
 }
 
 // print basic info
