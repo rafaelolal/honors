@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 
 #include "grid.h"
 
@@ -47,12 +48,27 @@ void grid_read_header(FILE* in_file, Grid* grid) {
   }
 }
 
+void* big_alloc(size_t bytes) {
+#ifdef HUGEPAGES
+  // huge pages need 2 MB alignment
+  const size_t huge = 2u << 20;
+  size_t rounded = (bytes + huge - 1) / huge * huge;
+  void* p = aligned_alloc(huge, rounded);
+  // it is a hint, meaning it tries huge pages but can fall back to 4 KB pages
+  if (p)
+    madvise(p, rounded, MADV_HUGEPAGE);
+  return p;
+#else
+  return malloc(bytes);
+#endif
+}
+
 // allocate space for the grid data.
 void grid_malloc_data(Grid* grid) {
   if (!grid->data) {
     size_t cells = (size_t)grid->nrows * grid->ncols;
     size_t bytes = (cells + grid->ncols) * sizeof(float);
-    grid->data = (float*)malloc(bytes);
+    grid->data = (float*)big_alloc(bytes);
     if (!grid->data) {
       printf("cannot allocate %zu bytes for the elevation grid\n", bytes);
       exit(1);

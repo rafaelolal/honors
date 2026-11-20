@@ -55,6 +55,9 @@ static inline uint8_t visgrid_cell(const VisGrid* g, const Grid* elev, int r,
 // all cells start NOT_VISIBLE
 VisGrid* visgrid_init(int nrows, int ncols);
 
+// back to all NOT_VISIBLE, to reuse the grid for another viewpoint
+void visgrid_clear(VisGrid* g);
+
 // header and nodata value come from elev, so the .asc matches the DEM
 void visgrid_write_to_file(const char* filename, const VisGrid* g,
                            const Grid* elev);

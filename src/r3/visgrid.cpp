@@ -12,7 +12,7 @@ VisGrid* visgrid_init(int nrows, int ncols) {
   g->nrows = nrows;
   g->ncols = ncols;
   size_t bytes = visgrid_bytes(nrows, ncols);
-  g->data = (uint8_t*)malloc(bytes);
+  g->data = (uint8_t*)big_alloc(bytes);
   // not an assert: those are compiled out in timing builds
   if (!g->data) {
     printf("cannot allocate %zu bytes for the viewshed grid\n", bytes);
@@ -22,6 +22,10 @@ VisGrid* visgrid_init(int nrows, int ncols) {
   // page faults aren't counted as viewshed time
   memset(g->data, 0, bytes);
   return g;
+}
+
+void visgrid_clear(VisGrid* g) {
+  memset(g->data, 0, visgrid_bytes(g->nrows, g->ncols));
 }
 
 void visgrid_write_to_file(const char* filename, const VisGrid* g,

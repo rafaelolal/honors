@@ -50,4 +50,8 @@ Grid* grid_read_from_file(char* filename);
 // free space
 void grid_free(Grid* grid);
 
+// malloc for the big grids. Built with -DHUGEPAGES (all make targets), it asks
+// for 2 MB pages instead of 4 KB ones
+void* big_alloc(size_t bytes);
+
 #endif
