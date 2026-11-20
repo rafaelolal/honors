@@ -33,3 +33,6 @@ src/grayscale/*.bin
 # Profiling data and diff output
 *.data
 src/visdiff/out/
+
+# Personal temporary files
+working/
