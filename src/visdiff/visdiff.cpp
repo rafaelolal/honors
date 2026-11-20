@@ -99,13 +99,13 @@ int main(int argc, char** argv) {
          d.n[DIFF_SAME_NODATA]);
 
   printf("\nN = TP + TN + FP + FN = %ld (nodata excluded)\n", n);
-  // ratio, or n/a when the denominator is 0
+  // ratio with its absolute counts, or n/a when the denominator is 0
   auto ratio = [](const char* name, long num, long den) {
     if (den)
-      printf("%-37s = %.6f (%.4f%%)\n", name, (double)num / den,
-             100.0 * num / den);
+      printf("%-37s = %ld / %ld = %.6f (%.4f%%)\n", name, num, den,
+             (double)num / den, 100.0 * num / den);
     else
-      printf("%-37s = n/a\n", name);
+      printf("%-37s = %ld / 0 = n/a\n", name, num);
   };
   ratio("error rate      (FP + FN) / N", fp + fn, n);
   ratio("relative error  (FP + FN) / (TP + FN)", fp + fn, tp + fn);
