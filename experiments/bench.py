@@ -10,12 +10,25 @@ Safe to stop and restart: finished runs are skipped. Failed runs are recorded
 with their status and retried on restart. Every run also gets a time_cmd row
 timing the whole command, even if it failed.
 
+A block with batch=True runs all its viewpoints (for each code, DEM, height,
+threads, schedule and rep) in one vis call with -p, so the DEM is read once.
+Each point still gets its own rows (clear_vis_grid, compute_viewshed_grid, ...);
+the shared phases (grid_read_from_file, TOTAL, time_cmd, ...) go on rows with
+empty vr and vc. Points that finished before a timeout or crash are kept.
+
 Logs go in logs/, named with the date: DATE-progress.log for what ran when, and
 one file per run with the program's full output.
+
+Each session saves the machine setup (CPU, kernel, governor, turbo, compiler,
+repo commit) to env/ID.json, and each row names it in the env column. Each run
+also records the 1-minute load average just before it starts, since other work
+on the machine slows a run down.
 """
 import csv
 import hashlib
 import itertools
+import json
+import platform
 import os
 import re
 import subprocess
@@ -31,6 +44,7 @@ from plans import PLANS
 TIMEOUT = 4 * 3600  # seconds, per run
 OUT = Path("results.csv")
 LOGS = Path("logs")
+ENVS = Path("env")
 
 KEY = ["experiment", "code", "binary_sha", "dem", "vr", "vc", "vh", "threads",
        "schedule", "rep"]
@@ -38,7 +52,7 @@ KEY = ["experiment", "code", "binary_sha", "dem", "vr", "vc", "vh", "threads",
 STATS = ["dem_name", "nrows", "ncols", "cells", "min_h", "max_h", "relief", "nodata",
          "nodata_pct", "viewshed_size", "viewshed_pct", "max_rss_mb"]
 COLUMNS = ["timestamp", *KEY, "status", "output_sha", *STATS,
-           "phase", "wall", "user", "sys"]
+           "phase", "wall", "user", "sys", "build_flags", "load1", "env"]
 
 # older binaries print no @stat lines, only these
 GRID_LINE = re.compile(r"rows=(\d+),cols=(\d+)\], range=\[(\S+), (\S+)\], "
@@ -48,6 +62,48 @@ VIEWSHED_LINE = re.compile(r"viewshed size=(\d+)")
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:12]
+
+
+def read(path):
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return ""
+
+
+def command(*cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return ""
+
+
+def save_env():
+    """Saves the machine setup to env/ID.json and returns ID."""
+    cpu = command("lscpu")
+    field = lambda name: next((l.split(":", 1)[1].strip() for l in cpu.splitlines()
+                               if l.startswith(name + ":")), "")
+    mem = read("/proc/meminfo").split("\n")[0].split()
+    env = {
+        "host": platform.node(),
+        "cpu": field("Model name"),
+        "logical_cpus": os.cpu_count(),
+        "numa_nodes": field("NUMA node(s)"),
+        "mem_gb": round(int(mem[1]) / 2**20, 1) if len(mem) > 1 else "",
+        "kernel": platform.release(),
+        "governor": read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
+        # 1 means turbo is off; empty if the machine has no intel_pstate
+        "no_turbo": read("/sys/devices/system/cpu/intel_pstate/no_turbo"),
+        "compiler": command("g++", "--version").split("\n")[0],
+        "python": platform.python_version(),
+        "commit": command("git", "rev-parse", "--short", "HEAD"),
+        "dirty": bool(command("git", "status", "--porcelain", "--untracked-files=no")),
+    }
+    blob = json.dumps(env, indent=2, sort_keys=True)
+    env_id = hashlib.sha256(blob.encode()).hexdigest()[:8]
+    ENVS.mkdir(exist_ok=True)
+    (ENVS / f"{env_id}.json").write_text(blob + "\n")
+    return env_id
 
 
 def viewpoints_for(spec, dem):
@@ -73,12 +129,16 @@ def configs(names):
                     yield dict(experiment=name, code=code, binary_sha=sha(code),
                                dem=dem, vr=vr, vc=vc, vh=vh, threads=threads,
                                schedule=schedule, rep=rep,
-                               args=[str(a) for a in b.get("args", [])])
+                               args=[str(a) for a in b.get("args", [])],
+                               batch=b.get("batch", False))
 
 
 def parse_stats(text, dem):
     """DEM and viewshed stats from a run's output; missing ones are left empty."""
     found = dict(l.split()[1:3] for l in text.splitlines() if l.startswith("@stat "))
+    # flags have spaces, so take the rest of the line
+    flags = [l.split(None, 2)[2] for l in text.splitlines()
+             if l.startswith("@build flags ") and len(l.split(None, 2)) > 2]
     if "nrows" not in found and (m := GRID_LINE.search(text)):
         found.update(zip(["nrows", "ncols", "min_h", "max_h", "nodata"], m.groups()))
     if "viewshed_size" not in found and (m := VIEWSHED_LINE.search(text)):
@@ -87,6 +147,7 @@ def parse_stats(text, dem):
     stats = dict.fromkeys(STATS, "")
     stats.update({k: v for k, v in found.items() if k in stats})
     stats["dem_name"] = Path(dem).stem
+    stats["build_flags"] = flags[0] if flags else ""
     if found.get("nrows"):
         cells = int(found["nrows"]) * int(found["ncols"])
         data_cells = cells - int(found["nodata"])
@@ -98,28 +159,38 @@ def parse_stats(text, dem):
     return stats
 
 
-def log_path(c):
+def log_path(cs):
+    c = cs[0]
+    point = [f"{len(cs)}pts"] if c["batch"] else [f"r{c['vr']}", f"c{c['vc']}"]
     parts = [time.strftime("%Y-%m-%d_%H%M%S"), c["experiment"], Path(c["code"]).name,
-             Path(c["dem"]).stem, f"r{c['vr']}", f"c{c['vc']}", f"h{c['vh']}",
+             Path(c["dem"]).stem, *point, f"h{c['vh']}",
              f"t{c['threads']}", c["schedule"], f"rep{c['rep']}"]
     return LOGS / ("_".join(p for p in parts if p) + ".log")
 
 
-def run(c, log):
+def run(cs, log):
+    """Runs one vis command: one viewpoint, or all of cs with -p if batch.
+    Returns (config, status, output_sha, stats, phases) for each row group to write."""
+    c, batch = cs[0], cs[0]["batch"]
     env = dict(os.environ, OMP_NUM_THREADS=str(c["threads"]),
                OMP_PROC_BIND="close", OMP_PLACES="cores")
     if c["schedule"]:
         env["OMP_SCHEDULE"] = c["schedule"]
+    point_args = ["-p", "points.txt"] if batch else ["-r", str(c["vr"]), "-c", str(c["vc"])]
     # CPUs 0-7 are the performance cores; going past 8 threads adds efficiency cores
     cmd = ["taskset", "-c", f"0-{c['threads'] - 1}",
            Path(c["code"]).resolve(), "-e", Path(c["dem"]).resolve(),
-           "-r", str(c["vr"]), "-c", str(c["vc"]), "-h", str(c["vh"]), *c["args"]]
-    # vis only writes the viewshed grid when given -v NAME
+           *point_args, "-h", str(c["vh"]), *c["args"]]
+    # vis only writes the viewshed grid when given -v NAME; with -p one per point
     args = c["args"]
     out_name = args[args.index("-v") + 1] if "-v" in args else None
+    out_shas = {}
     # outputs are big, so each run gets a directory that is deleted afterwards;
     # it's on the same disk as the project so write times stay realistic
+    load1 = f"{os.getloadavg()[0]:.2f}"
     with tempfile.TemporaryDirectory(dir=".", prefix="bench-") as tmp, log.open("w") as f:
+        if batch:
+            (Path(tmp) / "points.txt").write_text("".join(f"{x['vr']} {x['vc']}\n" for x in cs))
         start = time.monotonic()
         p = subprocess.Popen(cmd, cwd=tmp, env=env, stdout=f, stderr=subprocess.STDOUT)
         timed_out = threading.Event()
@@ -128,7 +199,7 @@ def run(c, log):
             timed_out.set()
             p.kill()
 
-        timer = threading.Timer(TIMEOUT, kill)
+        timer = threading.Timer(TIMEOUT * len(cs), kill)
         timer.start()
         # wait4 gives this run's own usage, including its peak memory;
         # taskset execs vis, so the pid is vis itself
@@ -143,21 +214,62 @@ def run(c, log):
         time_cmd = ["time_cmd", f"{wall:.6f}", f"{usage.ru_utime:.6f}",
                     f"{usage.ru_stime:.6f}"]
 
-        output_sha = ""
-        if status == "ok" and out_name:
-            output = Path(tmp) / "out" / out_name
-            if output.exists():
-                output_sha = sha(output)
-            else:
-                status = "no output"
+        if out_name:
+            name = Path(out_name)
+            for x in cs:
+                file = name.with_name(f"{name.stem}.r{x['vr']}.c{x['vc']}{name.suffix}") \
+                    if batch else name
+                if (Path(tmp) / "out" / file).exists():
+                    out_shas[id(x)] = sha(Path(tmp) / "out" / file)
 
     text = log.read_text(errors="replace")
-    phases = [l.split()[1:] for l in text.splitlines() if l.startswith("@time")]
-    if status == "ok" and not phases:
-        status = "no timing"
+    lines = text.splitlines()
+    phases = [l.split()[1:] for l in lines if l.startswith("@time")]
     stats = parse_stats(text, c["dem"])
     stats["max_rss_mb"] = f"{usage.ru_maxrss / 1024:.1f}"  # Linux reports KB
-    return status, output_sha, stats, [*phases, time_cmd]
+    stats["load1"] = load1
+
+    if not batch:
+        output_sha = out_shas.get(id(c), "")
+        if status == "ok" and out_name and not output_sha:
+            status = "no output"
+        if status == "ok" and not phases:
+            status = "no timing"
+        return [(c, status, output_sha, stats, [*phases, time_cmd])]
+
+    # -p output: "@ptime i phase wall user sys", "@pstat i viewshed_size N",
+    # "@pskip i r c reason", with i the line in points.txt
+    ptimes, psizes, pskips = {}, {}, {}
+    for l in lines:
+        w = l.split()
+        if w[:1] == ["@ptime"]:
+            ptimes.setdefault(int(w[1]), []).append(w[2:])
+        elif w[:1] == ["@pstat"] and w[2] == "viewshed_size":
+            psizes[int(w[1])] = w[3]
+        elif w[:1] == ["@pskip"]:
+            pskips[int(w[1])] = w[4]
+
+    data_cells = int(stats["cells"]) - int(stats["nodata"]) if stats["cells"] else 0
+    groups = []
+    for i, x in enumerate(cs):
+        ptime = ptimes.get(i, [])
+        output_sha = out_shas.get(id(x), "")
+        if i in pskips:
+            pstatus = f"skip {pskips[i]}"
+        elif any(ph[0] == "compute_viewshed_grid" for ph in ptime):
+            # a finished point counts even if the batch failed later
+            pstatus = "no output" if out_name and not output_sha else "ok"
+        else:
+            pstatus = status if status != "ok" else "no timing"
+        pstats = dict(stats, viewshed_size=psizes.get(i, ""), viewshed_pct="")
+        if i in psizes and data_cells:
+            pstats["viewshed_pct"] = f"{100 * int(psizes[i]) / data_cells:.4f}"
+        # a point with no timing still gets a row, so its status is on record
+        groups.append((x, pstatus, output_sha, pstats, ptime or [["none", "", "", ""]]))
+    if status == "ok" and not phases:
+        status = "no timing"
+    groups.append((dict(c, vr="", vc=""), status, "", stats, [*phases, time_cmd]))
+    return groups
 
 
 def main(names):
@@ -182,13 +294,35 @@ def main(names):
             if reader.fieldnames != COLUMNS:
                 sys.exit(f"{OUT} has different columns than bench.py writes; "
                          "migrate it or move it aside")
-            done = {tuple(r[k] for k in KEY) for r in reader if r["status"] == "ok"}
+            # a skipped point (nodata or outside the grid) would only fail again
+            done = {tuple(r[k] for k in KEY) for r in reader
+                    if r["status"] == "ok" or r["status"].startswith("skip")}
 
     todo = [c for c in configs(names) if tuple(str(c[k]) for k in KEY) not in done]
-    for i, c in enumerate(todo, 1):
-        say(f"[{i}/{len(todo)}] {c}")
-        status, output_sha, stats, phases = run(c, log_path(c))
-        say(f"    {status}, {phases[-1][1]}s")
+    # a batch block's unfinished points become one vis call per everything-but-viewpoint
+    jobs, batches = [], {}
+    for c in todo:
+        if not c["batch"]:
+            jobs.append([c])
+            continue
+        group = tuple(str(c[k]) for k in KEY if k not in ("vr", "vc"))
+        if group not in batches:
+            batches[group] = []
+            jobs.append(batches[group])
+        batches[group].append(c)
+
+    env_id = save_env()
+    say(f"setup saved to {ENVS / env_id}.json")
+    for i, cs in enumerate(jobs, 1):
+        c = cs[0]
+        shown = dict(c, vr=f"{len(cs)} points", vc="") if c["batch"] else c
+        say(f"[{i}/{len(jobs)}] {shown}")
+        groups = run(cs, log_path(cs))
+        status, phases, stats = groups[-1][1], groups[-1][4], groups[-1][3]
+        if c["batch"]:
+            ok = sum(g[1] == "ok" for g in groups[:-1])
+            status = f"{status}, {ok}/{len(cs)} points ok"
+        say(f"    {status}, {phases[-1][1]}s, load before {stats['load1']}")
 
         new_file = not OUT.exists()
         with OUT.open("a", newline="") as f:
@@ -196,9 +330,11 @@ def main(names):
             if new_file:
                 w.writerow(COLUMNS)
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            for phase in phases:
-                w.writerow([stamp, *(c[k] for k in KEY), status, output_sha,
-                            *(stats[k] for k in STATS), *phase])
+            for x, gstatus, output_sha, gstats, gphases in groups:
+                for phase in gphases:
+                    w.writerow([stamp, *(x[k] for k in KEY), gstatus, output_sha,
+                                *(gstats[k] for k in STATS), *phase,
+                                gstats["build_flags"], gstats["load1"], env_id])
 
 
 if __name__ == "__main__":
